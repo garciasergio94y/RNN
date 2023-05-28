@@ -15,7 +15,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 # Definir los nombres de los paquetes que se desean instalar
-packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
+packages <- c("readr", "readxl", "purrr", "dplyr", "htmltools",
+              "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
               "tictoc", "wavelets", "reticulate", "abind",
               "tensorflow", "tfdatasets", "keras")
@@ -53,6 +54,7 @@ require(readr)
 require(readxl)
 require(purrr)
 require(dplyr)
+require(htmltools)
 require(filesstrings)
 require(stringr)
 require(tidyr)
@@ -822,10 +824,8 @@ val_gen <- function() {
 ```{r merge dataframe}
 # Unir los tres dataframes features, qc_results y events en uno solo. Selección de pruebas opcional.
 feat_qc <- merge_feat_qc(features, qc_results) 
-head(feat_qc)
 featqc_event <- merge_featqc_event(feat_qc, events,
-                                   CLC="CLC00033")
-head(featqc_event)
+                                   CLC=NULL)
 ```
 ## Creación de los conjuntos de targets por selección según criterios específicos.
 
@@ -915,8 +915,12 @@ result_pct <- data_sel %>%
            ANALIZADOR == "DXI800 num 1") %>%
   select(RESULTADO)
 
+
 plot(result_pct[[1]])
+
 plot.modwt(wt(result_pct, "la20"))
+ 
+
 ```
 
 ## Transformación de la variable edad en variable categórica por agrupación (binning) en rangos de edades:
@@ -942,7 +946,7 @@ data_sel_tr <- as.data.frame(data_sel_tr)
 
 ```{r save csv}
 write.csv(data_sel_tr, row.names = F,
-          file = file.path(resultsdir, "data_sel_tr_TSH"))
+          file = file.path(resultsdir, "data_sel_tr"))
 
 ```
 
@@ -957,7 +961,7 @@ str(data_sel)
 # Tabla de frecuencia de aparición de eventos fuera de  control:
 
 write.csv(table(data$CTRL, data$NOMBRE_PRUEBA.x),
-          file = file.path(resultsdir, "tabla_TSH"))
+          file = file.path(resultsdir, "tabla"))
 # Plots resultados por prueba divididos por valor de la variable de proceso controlado (CTRL):
 
 ggplot(data , mapping = aes(x=TIEMPO_MUESTRA,
