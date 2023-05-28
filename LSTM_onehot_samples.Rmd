@@ -623,7 +623,7 @@ code_cat_var <- function(data) {
     } else {
       data_encoded <-  bind_cols(data %>%
                                    select(c(-all_of(cat_vars),
-                                            "CODIGO_PRUEBA")),
+                                            -"CODIGO_PRUEBA")),
                                  encoded_cols)
       }
   
@@ -702,6 +702,8 @@ create_lstm_data.1 <-
 
 Funciones generadoras globales de series para train y validation, Estas funciones generan de manera indefinida series con los datos de entrenamiento y validación, usando de manera consecutiva las funciones generadoras individuales almacenadas junto a los subconjuntos de datos con las posibles combinaciones de variables categóricas. Si se llega a la generación última se repite el proceso desde la primera. Incluyen un TryCatch para evitar la parada del modelo si se encuentran secuencias de datos vacías.  
 
+### Secuenciales:
+
 ```{r custom generator}
 index_train <- 1
 
@@ -760,41 +762,57 @@ val_gen <- function() {
 
 ```
 
-```{r}
-index_train <- 1
+### Aleatorizadas:
 
+```{r custom generator}
 train_gen <- function() {
-  if (index_train > length(train_k)) {
-      index_train <<- 1
-  }
-    
-  sequence <- train_k[[index_train]]()
-  index_train <<- index_train + 1
+  indices <- sample(length(train_k))
   
-  return(sequence)
+  for (i in indices) {
+    sequence <- tryCatch(
+      train_k[[i]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(sequence)) {
+      return(sequence)
+    }
+  }
+  
+  NULL
 }
 
-index_val <- 1
 
 val_gen <- function() {
-  if (index_val > length(val_k)) {
-    index_val <<- 1
-  }
-
-  sequence <- val_k[[index_val]]()
-  index_val <<- index_val + 1
+  indices <- sample(length(val_k))
   
-  return(sequence)
+  for (i in indices) {
+    sequence <- tryCatch(
+      val_k[[i]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(sequence)) {
+      return(sequence)
+    }
+  }
+  
+  NULL
 }
-```
 
+```
 
 # Carga y preprocesado de los datos 
 
 ## Lectura de los datos de medidas de muestras y características (features), eventos de QC y QC.
 
 ```{r training and testing data read}
-
 
   # Leer los archivos Excel de Lotes y crear un data frame  feautures
   features <- rbind(read_lot(), 
@@ -823,8 +841,7 @@ val_gen <- function() {
 # Unir los tres dataframes features, qc_results y events en uno solo. Selección de pruebas opcional.
 feat_qc <- merge_feat_qc(features, qc_results) 
 head(feat_qc)
-featqc_event <- merge_featqc_event(feat_qc, events,
-                                   CLC="CLC00033")
+featqc_event <- merge_featqc_event(feat_qc, events,)
 head(featqc_event)
 ```
 ## Creación de los conjuntos de targets por selección según criterios específicos.
@@ -896,7 +913,6 @@ head(data)
 ## Selección de características de interés y transformación wavelet de los datos de resultados de medidas.
 
 ```{r features selection and wavelet transformation}
-
 data_sel <- subset(data, 
                    select = c(TIEMPO_MUESTRA, PACIENTE_SEXO,
                               PACIENTE_EDAD, RESULTADO, ANALIZADOR,
@@ -942,8 +958,19 @@ data_sel_tr <- as.data.frame(data_sel_tr)
 
 ```{r save csv}
 write.csv(data_sel_tr, row.names = F,
-          file = file.path(resultsdir, "data_sel_tr_TSH"))
+          file = file.path(resultsdir, "data_sel_tr"))
 
+```
+
+## Carga de datos desde archivo csv.
+
+```{r data_sel_tr read csv}
+
+data_sel_tr <- read.csv(file.path(resultsdir, "data_sel_tr"),
+                        sep = ",")
+
+# Convertir fechas en formato POSIXct:
+data_sel_tr[,1] %<>% as.POSIXct(tz = "Europe/Madrid")
 ```
 
 ## Descriptiva de variables y gráficos de datos.
@@ -1026,6 +1053,400 @@ ggsave("frequency.pdf", width = 30, height = 20, units = "cm", dpi = 300,
        path = file.path(figuresdir)
        )
 ```
+## División de los datos en sets de entrenamiento, validación y test.
+
+```{r training, validation and test dataset division}
+# Se divide el dataset en 50% de datos para entrenamiento, 25% para test y 25% para validación. Para evitar fraccionar las unidades temporales diarias usamos percentiles de la secuencia temporal en días: 
+
+time_point_50 <- as.POSIXct(as.Date(
+  quantile(data_sel_tr[,1], 0.5)))
+
+time_point_75 <- as.POSIXct(as.Date(
+  quantile(data_sel_tr[,1], 0.75)))
+
+time_point_50
+time_point_75
+
+# Muestra de entrenamiento:
+train <- data_sel_tr %>%
+  subset(.[,1] <= time_point_50) 
+
+# Muestra de validación:
+val <- data_sel_tr %>%
+  subset(data_sel_tr[,1] > time_point_75)
+  
+
+# Muestra de test:
+#test <- data_sel_code$data %>%
+# subset(.[,1] > time_point_50 &
+  #         .[,1] <= time_point_75)
+```
+
+## Normalización de los datasets.
+
+```{r datasets normalization}
+train_n <- normalize_train(train)
+
+val_n <- norm_test_val(val, means = train_n$means,
+                              stds = train_n$stdev)
+```
+
+## Codificación de variables mediante one-hot.
+
+```{r one-hot coding}
+train_code <- code_cat_var(train_n$scaled_data)
+
+val_code <- code_cat_var(val_n)
+
+```
+
+## Redistribución temporal de casos y oversampling.
+
+```{r}
+# Crear una función para distribuir los casos con CTRL=1 de manera uniforme en el tiempo
+CTRL_distribute <- function(data, ratio) {
+  # Obtener las fechas con CTRL=1
+  data$rounded_date <- floor_date(as.Date(data[[1]]))
+  dates_ctrl_1 <- unique(data[data[["CTRL"]] == 1, "rounded_date"])
+  
+  # Calcular la cantidad de casos a agregar en cada fecha
+  add_cases <- round(ratio * nrow(data) / length(dates_ctrl_1))
+  
+  # Crear una nueva columna para asignar las fechas distribuidas       uniformemente
+  data$date_dist <- data$rounded_date
+  
+  # Distribuir los casos uniformemente en el tiempo
+  for (date in dates_ctrl_1) {
+    index_date <- which(data$rounded_date == date)
+    index_date_add <- sample(index_date,
+                             add_cases, replace = TRUE)
+    unique_dates <- sample(unique(data$rounded_date),
+                           add_cases, replace = TRUE)
+    data$date_dist[index_date_add] <- unique_dates
+  }
+  
+  # Eliminar columnas temporales
+  data$date_dist <- NULL
+  data$rounded_date <- NULL
+  
+  return(data)
+}
+
+# Aplicar la función para distribuir las fechas uniformemente:
+
+up_train <- train_code$data
+up_train <- CTRL_distribute(up_train, 1)
+
+# Convertir variable numérica CTRL a factor:
+up_train$CTRL %<>% as.factor()
+
+# Aplicar upSample en el dataframe modificado
+"%ni%" <- Negate("%in%")
+up_train_up <- upSample(
+  x = up_train[,colnames(up_train) %ni% "CTRL"], 
+  y = up_train$CTRL)
+names(up_train_up)[ncol(up_train_up)] <- "CTRL"
+
+# Verificar los resultados
+table(up_train_up$CTRL)
+
+# Plot tras oversampling de resultados por CODIGO_PRUEBA clasificados por estado de CTRL:
+ggplot(up_train , mapping = aes(x=TIEMPO_MUESTRA,
+                                    y=RESULTADO,
+                                    color = CTRL)) +
+         geom_point(size=0.25) +
+         #(~CODIGO_PRUEBA, scales = "free", ncol = 4)+    
+         theme(strip.background = element_blank()) +
+         theme(strip.text = element_text(size=8)) +
+         scale_color_manual(values = c("blue", "red"),
+                             name = "CTRL")
+
+ggsave(file.path(figuresdir, "QC_state_over_TSH.pdf"), width = 30, height = 20, units = "cm", dpi = 300)
+
+# Devolver el factor a variable numérica: 
+
+up_train_up$CTRL <- as.integer(up_train_up$CTRL) - 1 
+train_code$data <- up_train_up
+```
+
+
+```{r training oversampling}
+# Oversampling del dataset de training de la clase minoritaria
+
+up_train <- as.data.frame(train_code$data)
+ 
+# Convertir variable numérica CTRL a factor:
+up_train$CTRL %<>% as.factor()
+
+# Oversampling:
+"%ni%" <- Negate("%in%")
+train_bal <- caret::upSample(
+  x = up_train[,colnames(up_train) %ni% "CTRL"], 
+  y = up_train$CTRL)
+names(train_bal)[ncol(train_bal)] <- "CTRL"
+
+# Devolver el factor a variable numérica: 
+
+train_bal$CTRL <- as.integer(train_bal$CTRL) - 1 
+train_code$data <- train_bal
+
+table(train_code$data$CTRL)
+
+# Plot resultados por prueba divididos por valor de la variable de proceso controlado tras oversampling:
+up_train <- as.data.frame(train_n$scaled_data)
+ 
+# Convertir variable numérica CTRL a factor:
+up_train$CTRL %<>% as.factor()
+
+# Oversampling:
+train_bal <- caret::upSample(
+  x = up_train[,colnames(up_train) %ni% "CTRL"], 
+  y = up_train$CTRL)
+names(train_bal)[ncol(train_bal)] <- "CTRL"
+
+# Plot tras oversampling de resultados por CODIGO_PRUEBA clasificados por estado de CTRL:
+ggplot(train_bal , mapping = aes(x=TIEMPO_MUESTRA,
+                                    y=RESULTADO,
+                                    color = CTRL)) +
+         geom_point(size=0.25) +
+         facet_wrap(~CODIGO_PRUEBA, scales = "free", ncol = 4)+    
+         theme(strip.background = element_blank()) +
+         theme(strip.text = element_text(size=8)) +
+         scale_color_manual(values = c("blue", "red"),
+                             name = "CTRL")
+
+ggsave(file.path(figuresdir, "QC_state_over_TSH.pdf"), width = 30, height = 20, units = "cm", dpi = 300)
+```
+
+## Preparación de series temporales de longitud k agrupadas por categorías y por fechas en los datasets de training y validación. 
+
+```{r trainig set case grouping and k length time series creation}
+# Creación de series temporales de tamaño k con los datos de training:
+
+# Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de training usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir (en este caso el analizador): 
+
+train_indx <- unique_lab_cases(train_code$data,
+                               categorical_vars = c(28:29))
+
+# Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
+code_values <- unique(train_indx[,"code"])
+code_dictionary <- data.frame(code = code_values)
+code_dictionary %<>%  
+  mutate(., index = as.numeric(factor(code_values, 
+                                      levels = code_values)))
+
+# Sustituimos los códigos de train_indx por sus índices numéricos:
+train_indx$index <- code_dictionary$index[match(train_indx$code, code_dictionary$code)]
+train_indx$code <- NULL
+
+# Creamos todas las posibles combinaciones de códigos y fechas:
+
+train_indx$TIEMPO_MUESTRA %<>% as.Date()
+
+combinations_train <- expand.grid(code = code_values,
+                            date = unique(train_indx$TIEMPO_MUESTRA))
+
+# Traducimos los códigos a índices:
+
+combinations_train$index <-
+  code_dictionary$index[match(combinations_train$code,
+                              code_dictionary$code)]
+
+# Creación de lista de funciones generadoras de las series temporales de longitud k por categoría de CODIGO_PRUEBA del dataset de entrenamiento. Se generan series para cada día de observación conteniendo los resultados pertenecientes a cada una de las categorías elegidas:
+
+# Hiperparámetros para generar las series temporales:
+lookback <- 10 # Longitud de la secuencia previa al target.
+delay <- 0 # Se escoge 0 debido a que los targets futuros ya se                 colocaron en la misma fila que la muestra del día                  anterior.
+batch_size <- 30 # Tamaño de batch.
+min_index <- 1 # Indice de partida de la serie temporal.
+predseries <- length(train_indx) - 2 # Posición en el dataset de la variable a predecir (CTRL) una vez eliminados TIEMPO_MUESTRA e index.
+
+train_k <- mapply(function(index, date) {
+  data <- as.matrix(
+  train_indx[train_indx[,"TIEMPO_MUESTRA"] == date &
+               train_indx[,"index"] == index,
+             - c(1, length(train_indx))])
+  max_index <- nrow(data)-delay
+  
+  create_lstm_data.1(
+    data = data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = max_index,
+    predseries = predseries)
+},
+index = combinations_train$index,
+date = combinations_train$date,
+SIMPLIFY = T
+) 
+
+
+# Cálculo del número de steps de training:
+train_steps <- round((nrow(train_code$data) - lookback) / batch_size)
+
+```
+
+```{r Validation set case grouping and k length time series creation}
+# Creación de los índices identificativos de combinaciones de variables categóricas para el set de validación:
+val_indx <- unique_lab_cases(val_code$data, 
+                             categorical_vars = c(28:29))
+
+# Usamos el diccionario de códigos creado anteriormente: 
+val_indx$index <- code_dictionary$index[match(val_indx$code,
+                                            code_dictionary$code)]
+val_indx$code <- NULL
+
+# Generar todas las combinaciones de index y date para el set de validación:
+
+val_indx$TIEMPO_MUESTRA %<>% as.Date()
+
+combinations_val <- expand.grid(code = code_values,
+                            date = unique(val_indx$TIEMPO_MUESTRA))
+
+# Traducimos los códigos a índices:
+
+combinations_val$index <-
+  code_dictionary$index[match(combinations_val$code,
+                              code_dictionary$code)]
+
+# Creación de lista de funciones generadoras del dataset de validación:
+
+val_k <- mapply(function(index, date) {
+  data <- as.matrix(
+  val_indx[val_indx[,"TIEMPO_MUESTRA"] == date &
+               val_indx[,"index"] == index,
+             - c(1, length(val_indx))])
+  max_index <- nrow(data)-delay
+  
+  create_lstm_data.1(
+    data = data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = max_index,
+    predseries = predseries)
+  },
+  index = combinations_val$index,
+  date = combinations_val$date,
+  SIMPLIFY = T
+)  
+
+# Cálculo del número de steps de validación:
+val_steps <- round((nrow(val_code$data)-lookback) / batch_size)
+```
+
+# Definición del modelo de Machine Learning. Red Neuronal Recurrente LSTM (Long-short term memory).
+
+```{r model definition}
+set.seed(123)
+
+input_shape <- c(lookback, dim(train_code$data[,-1])[[-1]])
+
+model_1 <- keras_model_sequential() %>%
+  
+  layer_masking(mask_value = -99999, input_shape = input_shape) %>%
+  layer_lstm(units = 32, dropout = 0.1, recurrent_dropout = 0.5,
+             input_shape = c(NULL, lookback,
+                             dim(train_code$data[,-1])[[-1]])) %>%
+  layer_dense(units = 1, activation = "sigmoid")
+```
+
+```{r custom F1 metrics function}
+# Función para calcular F1 como métrica para el modelo:
+  f1_score <- function(y_true, y_pred) {
+  true_positives <- sum(backend()$round(backend()$clip(y_true * y_pred, 0, 1)))
+  possible_positives <- sum(backend()$round(backend()$clip(y_true, 0, 1)))
+  predicted_positives <- sum(backend()$round(backend()$clip(y_pred, 0, 1)))
+  precision <- true_positives / (predicted_positives + backend()$epsilon())
+  recall <- true_positives / (possible_positives + backend()$epsilon())
+  f1_score <- 2 * precision * recall / (precision + recall + backend()$epsilon())
+  return(f1_score)
+}
+
+```
+
+```{r model compilation and callbacks}
+model_1 %<>% compile(
+  optimizer = "adam",
+  loss = "binary_crossentropy",
+  metrics = list("binary_accuracy",
+                 f1_score)
+  )
+   
+callbacks <- list(
+  callback_model_checkpoint(file.path(resultsdir, "lstm_1.keras",
+                                     save_best_only = TRUE)))
+```
+
+
+```{r model fit}
+history_1 <- model_1 %>% fit_generator(
+  generator = train_gen,
+  steps_per_epoch = train_steps,
+  epochs = 10,
+  validation_data = val_gen,
+  validation_steps = val_steps,
+  callbacks = callbacks
+)
+
+
+plot(history_1)
+```
+
+```{r}
+
+# Evaluación del modelo:
+path <- file.path(resultsdir, "lstm_1.keras")
+model <- load_model_tf(path) 
+sprintf("Test MAE: %.2f", evaluate(model, test_ds)["mae"]) 
+ 
+```
+
+```{r model evaluation, eval=FALSE}
+# Carga del mejor modelo y evaluación:
+model <- load_model_tf("lstm_1.keras")
+sprintf("Test MAE: %.2f", evaluate(model, test_ds)["accuracy"])
+
+```
+
+```{r RNN baseline calculation}
+# Función para calcular la exactitud mínima del modelo, basada en la predicción de todos los casos con el target más frecuente
+
+evaluate_naive_method <- function(data_df, ctrl_colname) { 
+  # Cálculo de la moda de CTRL:
+  ctrl_mode <- as.numeric(names(sort(table(
+    data_df[[ctrl_colname]]),
+    decreasing = TRUE)[1]))
+
+  # Cálculo de accuracy:
+  actual_ctrl <- data_df[[ctrl_colname]]
+  predicted_ctrl <- rep(ctrl_mode, length(actual_ctrl))
+  accuracy <- sum(actual_ctrl == predicted_ctrl) /
+    length(actual_ctrl)
+
+  accuracy
+}
+
+# Cálculo de accuracy basado en predecir con la moda:
+accuracy_train <- evaluate_naive_method(train_n$scaled_data, "CTRL")
+accuracy_val <- evaluate_naive_method(val_n, "CTRL")
+
+sprintf("Training naive accuracy: %.2f", accuracy_train)
+sprintf("Validation naive accuracy: %.2f", accuracy_val)
+
+```
+
+La medida F1 es una métrica de evaluación de modelos de clasificación que combina la precisión y el recall de un modelo en un único valor. Esta medida es especialmente útil cuando el conjunto de datos está desequilibrado y hay una gran cantidad de falsos positivos o falsos negativos.
+
+La fórmula para calcular F1 es:
+
+F1 = 2 * (precisión * recall) / (precisión + recall)
+
+donde la precisión se refiere a la proporción de verdaderos positivos en relación con todos los elementos que el modelo ha clasificado como positivos, y el recall se refiere a la proporción de verdaderos positivos en relación con todos los elementos que son realmente positivos en el conjunto de datos. 
+El valor de F1 oscila entre 0 y 1, donde un valor de 1 indica una precisión y un recall perfectos, mientras que un valor de 0 indica que el modelo no ha acertado ninguna predicción positiva.
 
 
 ```{r loop, eval=FALSE}
