@@ -1,0 +1,924 @@
+---
+title: 'Aplicación del aprendizaje automático al laboratorio de diagnóstico clínico:
+  Detección temprana de series analíticas fuera de control en análisis inmunoquímicos
+  de muestras de sangre mediante algoritmos de Machine Learning'
+author: "Sergio García Muñoz"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Definir los nombres de los paquetes que se desean instalar
+packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
+              "stringr", "tidyr", "lubridate", "ggplot2", "caret",
+              "tictoc", "wavelets", "reticulate", "abind",
+              "tensorflow", "tfdatasets", "keras")
+
+# Función para instalar paquetes si no están ya instalados
+install_packages <- function(package) {
+  if (!require(package, character.only = TRUE)) {
+    install.packages(package)
+    }
+}
+
+# Aplicar la función para cada uno de los paquetes
+lapply(packages, install_packages)
+
+```
+
+```{r}
+require(readr)
+require(readxl)
+require(purrr)
+require(dplyr)
+require(filesstrings)
+require(stringr)
+require(tidyr)
+require(lubridate)
+require(ggplot2)
+require(caret)
+require(wavelets)
+require(tictoc)
+require(reticulate)
+require(abind)
+require(tensorflow)
+require(tfdatasets)
+require(keras)
+
+# Definir el directorio donde se encuentran los archivos de datos:
+workingdir <- getwd()
+datadir <- file.path(workingdir, "Datos/daily_s")
+eventdir <- file.path(workingdir, "Datos/daily_s/Event")
+eventdir_old <- file.path(workingdir, "Datos/daily_s/Event/old")
+lotdir <- file.path(workingdir, "Datos/daily_s/Lot")
+lotdir_old <- file.path(workingdir, "Datos/daily_s/Lot/old")
+qcdir <- file.path(workingdir, "Datos/daily_s/qc")
+qcdir_old <- file.path(workingdir, "Datos/daily_s/qc/old")
+resultsdir <- file.path(workingdir, "Resultados")
+
+# Definir el intervalo de tiempo en segundos entre las lecturas
+interval <- 60
+```
+
+
+```{r read_qc}
+# Función para leer los archivos xls de valores de QC para cada técnica y cada máquina, añadir una columna con la id del equipo, otra con el código CLC de la prueba y crear un data frame final. La función contiene una condición if diseñada por el diferente formato de exportación de los archivos del control en uso y el histórico de controles inactivos:
+
+read_qc <- function() {
+  # Crear una lista de archivos existentes en datadir que contienen los valores de QC, tanto en uso como inactivos:
+  files_list <- list.files(qcdir, pattern = "CLC",
+                           full.names = T) 
+  
+  # Lista vacía para contener los dataframes originados en el loop:
+  list_df <- list()
+ 
+  # Loop for para crear una lista de dataframes leyendo cada           archivo de qc:
+  for(i in 1:length(files_list)){
+    data <- read_xls(files_list[i], skip = 4)
+  
+    # Buscar y extraer el id del equipo en la primera fila:
+    dev_ids <- c("DXI800 num 1", "DXI800 num 2",
+             "DXI800 num 3")
+    first_rows <- read_xls(files_list[i], 
+                        col_names = F, n_max = 3) 
+    match_dev <- which(grepl(paste(dev_ids, 
+                                   collapse = "|"),
+                                   first_rows))
+    start_pos <- regexpr("(?<=DxI)\\S+",
+                         first_rows[match_dev],
+                         perl = TRUE)
+    dev <- substring(first_rows[match_dev], start_pos)
+    
+    # Extraer el código CLC del nombre del archivo
+    start_pos <- regexpr("(?<=CLC)\\S+",
+                         files_list[i],
+                         perl = TRUE)
+    end_pos <- regexpr("\\)", files_list[i], start_pos)
+    clc <- substring(files_list[i], start_pos, end_pos - 1)
+    
+    # Añadir como columnas "ANALIZADOR" y "CODIGO_PRUEBA" las           cadenas extraídas:
+    data %<>% mutate("ANALIZADOR"= substr(dev, 13, 24),
+                     "CODIGO_PRUEBA"= paste("CLC",clc, sep = "")) %>%
+              relocate("ANALIZADOR", "CODIGO_PRUEBA", .after = 5)
+    
+    # En caso de que el archivo de datos sea del histórico, la    identificación del control no se encuentra como columna, sino en la cabecera, ya que los archivos han sido generados para cada  nivel de control individualmente. 
+    # Identificación de este tipo de archivo, extracción de la identificación y creación de la columna "Control": 
+    
+    if(!("Control" %in% colnames(data))) {
+      # Extraer el nombre del control de la fila 3, columna D:
+      cont <- read_xls(files_list[i], 
+                        col_names = F, range = "D2:D2")
+      data %<>% mutate("Control"= as.character(cont)) %>%
+              relocate("Control", .after = 4)
+      }
+    
+    # Agrega el dataframe actual a la lista:
+    list_df[[i]] <- data
+  }  
+    
+  # Unir todos los dataframes en uno solo:
+  df <- bind_rows(list_df)
+  
+  # Cambia el nombre a la columna Lote de reactivos:
+  colnames(df)[10] <- "LOTE_REACTIVO"
+  
+  # Fusiona las columnas de los valores de concentraciones         encontrados en distintas unidades en una sola columna y cambia el tipo de valor a numérico:
+   df <- unite(df, "Resultado", c(3, 13:21),
+                          sep = "", na.rm = T)
+   df[[3]] %<>% as.numeric()
+   
+  # Reordena el dataframe:
+   df %<>% relocate("Sup/Inf Media", .after = 4)
+   
+  # Cambia el nombre a la columna Lote de reactivos:
+   colnames(df)[3] <- "QC_RESULT"
+  
+  # Elimina filas con valores NA en LOTE_REACTIVO:
+  
+   df <- df[complete.cases(df$LOTE_REACTIVO), ]
+  
+   # Mueve el archivo leído a la carpeta old:
+  # file.move(files_list, qc_old, overwrite = TRUE)
+  
+  return(df)
+}
+```
+
+```{r QC level detection}
+# Función para detectar el nivel de cada control de calidad basándose en el string que contiene su nombre (detecta 1, 2 ó 3 al final del string o bien las palabras "alto", "medio" o "bajo"). Una vez detectado el nivel genera un valor numérico 1, 2, ó 3.
+
+qc_level <- function(df) {
+  # Creamos una nueva columna NIVEL:
+  df$NIVEL <- NA
+  
+  # Extraemos el último caracter del string:
+  last_char <- substr(df$Control, nchar(df$Control),
+                      nchar(df$Control))
+  
+  # Condición para establecer si los términos "alto", "bajo" o "medio" se encuentran en el string del nombre del control:
+  df$NIVEL <- ifelse(grepl("\\b(bajo|medio|alto)\\b", df$Control, ignore.case = TRUE),
+                     ifelse(grepl("\\balto\\b", df$Control, ignore.case = TRUE), 3,
+                            ifelse(grepl("\\bbajo\\b", df$Control, ignore.case = TRUE), 1,
+                                   ifelse(grepl("\\bmedio\\b", df$Control, ignore.case = TRUE), 2, NA))),
+                     ifelse(last_char %in% c("1", "2", "3"), as.numeric(last_char), NA))
+  # Se reordena el dataframe: 
+  df %<>% relocate("NIVEL", .after = 6)
+  return(df)
+}
+```
+
+
+```{r figure_ext}
+# Función para extraer datos numéricos de la columna media y sd:
+figure_ext <- function(df, col_number) {
+  # Extrae números presentes en la columna especificada:
+  mean_val <- c()
+  sd_val <- c()
+  for (i in 1:nrow(df[col_number])){
+    numbers <- str_extract_all(df[i, col_number],
+                             "\\d+(\\.\\d+)?") 
+  
+    # Convertir a decimal y hallar media y sd:
+    numbers <- as.double(unlist(numbers))
+    mean_val <- rbind(mean_val, 
+                        (numbers[1] + numbers[2])/2)
+    sd_val <- rbind(sd_val, 
+                      (numbers[2] - numbers[1])/2)
+  }
+  
+  # Crear nuevas columnas media y sd:
+  
+  df %<>% mutate("Media" = mean_val, "SD" = sd_val) %>%
+          relocate("Media", "SD", .after =3)
+  
+  # Borrar columna original
+  df[[col_number]] <- NULL
+  
+  # Devolver el dataframe modificado
+  return(df)
+}
+```
+
+```{r merge_date}
+# Función para fusionar columnas Fecha y Hora en una nueva columna Fecha_hora y borrar las columnas individuales
+  merge_date <- function(df){
+    df %<>%
+      mutate("TIEMPO_QC" = 
+               as.POSIXct(paste(Fecha, Hora),
+                          format = "%d/%m/%y %H:%M:%S",
+                          tz=Sys.timezone()),
+             .before = 1)
+    # Borrar columnas originales
+    df[["Fecha"]] <- NULL
+    df[["Hora"]] <- NULL
+        
+  return(df)
+}
+```
+
+```{r read_event}
+# Función para leer los archivos csv de eventos y crear un data frame
+read_event <- function() {
+  # Crea una lista de archivos existentes en datadir            correspondientes a los eventos de QC diarios:
+  files_list <- list.files(eventdir, pattern = "Evento_",
+                           full.names = T) 
+  
+  # Especifica los tipos de datos que contiene cada columna:
+  col_types <- cols(
+  FECHA = col_character(),
+  LOTE = col_integer())
+  
+  # Crea una lista de dataframes leyendo cada archivo:
+  df_list <- map(files_list,
+                 ~read_delim(.x,
+                             delim = "|",
+                             col_types = col_types, 
+                             col_select = -c("LOTE"),
+                             trim_ws = T))
+  
+  # Crea el dataframe final:
+  df <- bind_rows(df_list)
+  
+  # Convierte la fecha leída como string en formato POSIXct y cambia   nombre a columna:
+  df[[1]] <- as.POSIXct(gsub(",", ".", df[[1]]),
+               format = "%d/%m/%y %H:%M:%S",
+               tz=Sys.timezone())
+  colnames(df)[[1]] <- "TIEMPO_EVENTO"
+  
+  # Elimina substring no deseado en el nombre del            analizador:
+  df[[2]] <- substring(df[[2]],10, 21)
+
+  # Mueve el archivo leído a la carpeta old:
+  #file.move(files_list, eventdir_old, overwrite = TRUE)
+  
+  return(df)
+}
+```
+
+```{r merge_qc_events}
+# Función para unir los dataframes features día D-1 y qc_results día D en uno solo mediante Left outer join:
+
+merge_qc_events <- function(df1, df2){
+  # Crear timestamps con solo la fecha: 
+  df1$rounded_date <- floor_date(as.Date(df1[[1]]),
+                                 unit = "day")
+  df2$rounded_date <- floor_date(as.Date(df2[[1]]),
+                                 unit = "day")
+  
+  # Crear un nuevo dataframe con merge (equivale a left outer join):
+  merged_df <- merge(df1, df2, 
+                     by = c("rounded_date", "ANALIZADOR",
+                            "CODIGO_PRUEBA"), all.x = T)
+  
+  # Borrar los timestamps con solo fecha:
+  merged_df$rounded_date <- NULL
+  merged_df$rounded_date <- NULL
+  
+  return(distinct(merged_df))
+
+}
+```
+
+```{r training and testing data read}
+# Lectura de los datos que se usarán para training y test
+
+  #Leer los archivos de eventos de QC y crear el data frame events:
+  events <- read_event()
+  head(events)
+  
+  #Leer los archivos de resultados de QC y crear el data frame qc_results:
+  qc_results <- read_qc()
+  head(qc_results)
+  qc_results %<>% qc_level()
+  qc_results <- qc_results %>% merge_date()
+  head(qc_results)
+  qc_results <- figure_ext(qc_results, 3)
+  head(qc_results)
+
+  
+```
+
+```{r merge dataframe}
+# Unir los dos dataframes qc_results y events en uno solo.
+qc_event <- merge_qc_events(qc_results, events) 
+head(qc_event)
+
+```
+
+```{r features selection and wavelet transformation}
+
+# Selección de características de interés y recodificación de variables:
+
+qc_data_sel <- subset(qc_results,
+                      select = c(TIEMPO_QC, QC_RESULT, ANALIZADOR,
+                                 CODIGO_PRUEBA, NIVEL))
+
+# Aplicar la transformación wavelet a la variable QC_RESULT para cada grupo de técnica:
+# Definir una función que aplique la transformación wavelet de tipo Maximal Overlap Discrete Wavelet Transformation (MODWT) a un conjunto de datos agrupado por una determinada variable:
+
+# Función para calcular la transformación wavelet que devuelve los coeficientes de wavelet y los coeficientes de escalado:
+wt <- function(x, wavefun){
+  mod <- modwt(x, wavefun, boundary = "periodic")
+  return(mod)
+}
+
+# Función que aplica la transformación wavelet a un dataframe df agrupado según group y devuelve un dataframe con los coeficientes y escalas para cada observación:
+
+wavelet_tr <- function(df, gr) {
+  
+  # Aplicar la función wt a cada grupo por separado
+  df_wavelet <- df %>%
+    group_by(!! rlang::ensym(gr)) %>%
+    reframe(WL_COEF = list(wt(QC_RESULT, "la20")@W),
+              WL_SCALE = list(wt(QC_RESULT, "la20")@V)) %>%
+    ungroup()
+  
+  # Aplanar las columnas con listas generadas por reframe()
+  df_wavelet <- df_wavelet %>%
+    reframe(across(c(WL_COEF, WL_SCALE), 
+                   ~map(.x, as.data.frame) %>% 
+                     bind_rows(.id = NULL)))
+  
+  return(df_wavelet)
+}
+
+qc_wavelet_df <- qc_data_sel %>% wavelet_tr(CODIGO_PRUEBA)
+
+# Añadir coeficientes del wavelet:
+qc_data_sel_wl <- qc_data_sel %>%
+  bind_cols(unnest(qc_wavelet_df, 
+                   cols = c(WL_COEF, WL_SCALE))) %>%
+  relocate(starts_with(c("W","V")), .after = "QC_RESULT")
+
+  
+# Ejemplo escalograma QC TSH (CLC00638):
+scalo_tsh <- subset(qc_data_sel, CODIGO_PRUEBA=="CLC00033")$QC_RESULT
+
+plot.modwt(wt(scalo_tsh, "la20"))
+```
+
+
+```{r one-hot coding and normalization}
+# Función para convertir las variables categóricas tipo string en vectores numéricos y codificarlas (one hot), así como normalizar los valores de las variables continuas, creando una lista que retiene en un vector la información de los niveles de los factores:
+
+code_cat_var <- function(data) {
+  # Eliminación del CODIGO_PRUEBA si solo se trabaja con una sola:
+  if(length(unique(data$CODIGO_PRUEBA))==1){
+    data %<>% select(., -CODIGO_PRUEBA)
+  }
+  # Detección de strings:
+  cat_vars <- c(which(sapply(data, is.character)), length(data))
+  # Conversión a factores:
+  data_cat <- lapply(data[,cat_vars], as.factor)
+  # Extracción de niveles:
+  levels <- lapply(data_cat, levels)
+  
+  # Codificar one-hot todas las variables factor:
+  encoded_cols <- lapply(seq_along(data_cat), function(i) {
+    cols <- model.matrix(~ factor(data_cat[[i]]) - 1)
+    colnames(cols) <- paste0(names(data)[cat_vars[i]], "_", levels[[i]])
+    cols
+    })
+  
+  # Unir columnas codificadas con conjunto de datos original:
+  if (!"CODIGO_PRUEBA" %in% names(data)) {
+    data_encoded <- bind_cols(data %>% 
+                                select(-all_of(cat_vars)),
+                                encoded_cols)
+    } else {
+      data_encoded <-  bind_cols(data %>%
+                                   select(c(-all_of(cat_vars),
+                                            "CODIGO_PRUEBA")),
+                                 encoded_cols)
+     
+}
+  
+  return(list(data = data_encoded, levels = levels))
+}
+
+qc_data_sel_code <- code_cat_var(qc_data_sel_wl)
+qc_data_sel_code$data %<>% as.data.frame()
+
+head(qc_data_sel_code$data)
+
+write.csv(qc_data_sel_code$data,
+          file = file.path(resultsdir, "qc_data_sel_code"),
+          row.names = F, col.names = F)
+```
+
+```{r data description, eval=FALSE}
+
+# Estructura de datos:
+str(data_sel)
+
+
+# Tabla de frecuencia de aparición de eventos fuera de  control:
+
+write.csv(table(data$CTRL, data$NOMBRE_PRUEBA.x),
+          file = file.path(resultsdir, "tabla"))
+# Plots resultados por prueba divididos por valor de la variable de proceso controlado (CTRL):
+
+ggplot(data , mapping = aes(x=TIEMPO_MUESTRA,
+                                    y=RESULTADO,
+                                    color = CTRL)) +
+         geom_point(size=0.25) +
+         facet_wrap(~NOMBRE_PRUEBA.x, scales = "free", ncol = 4)+    
+         theme(strip.background = element_blank()) +
+         theme(strip.text = element_text(size=8)) +
+         scale_color_manual(values = c("blue", "red"),
+                             name = "CTRL")
+
+ggsave("results.pdf", width = 30, height = 20, units = "cm", dpi = 300)
+
+# Plots resultados QC a lo largo del tiempo divididos por material de control
+test_list <- unique(data.frame(featqc_event$NOMBRE_PRUEBA.x,
+                    featqc_event$CODIGO_PRUEBA)) 
+colnames(test_list) <- c("NOMBRE_PRUEBA", "CODIGO_PRUEBA")
+
+
+for (i in seq_along(test_list$CODIGO_PRUEBA)) {
+  ggplot_qc_DxI_1 <- subset(qc_results,
+                        CODIGO_PRUEBA == test_list$CODIGO_PRUEBA[i])
+  plot <- ggplot(ggplot_qc_DxI_1, mapping =
+                   aes(x=TIEMPO_QC,
+                       y=QC_RESULT,
+                       color = Control)) +
+          geom_point(size=0.5) +
+          theme_bw() +
+          labs(x="Date",y="Resultado QC") +
+          scale_x_datetime(date_breaks = "1 month", date_labels =
+                             "%b",
+                   limits = as.POSIXct(c("2022-07-01 00:00:00",
+                                        "2023-03-01 23:59:59"))) + 
+          ggtitle(paste(test_list$NOMBRE_PRUEBA[i])) +
+          theme(plot.title = element_text(size="10",
+                                          face="bold",hjust = 0)) +
+          theme(axis.title.x = element_text(size="10")) +
+          theme(axis.title.y = element_text(size="10")) +
+          theme(axis.text.y = element_blank()) +
+          theme(axis.text.x = element_text(size=10)) +
+          theme(axis.ticks.y = element_blank()) +
+          theme(axis.ticks.x = element_blank()) +
+          theme(panel.border = element_blank()) +
+          theme(plot.margin = margin(t = 1, r = 1, b = 1, l = 1,
+                                     unit = "cm")) +
+          scale_color_manual(values = c("red", "blue", "green", 
+                                        "black", "orange", "cyan"),
+                             name = "Control")
+  
+  ggsave(plot, file=paste(test_list$NOMBRE_PRUEBA[i], "qc.png", sep='_'), width=15, height = 10, units=c("cm"))  
+}
+
+#Plot frecuencia de resultados obtenidos por prueba:
+
+ggplot(data, aes(x=NOMBRE_PRUEBA.x)) +
+  geom_bar(fill="blue") +
+  labs(title="Cantidad de medidas por NOMBRE_PRUEBA",
+       x="NOMBRE_PRUEBA", y="frecuencia") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+ggsave("tests.pdf", width = 30, height = 20, units = "cm", dpi = 300)
+```
+
+```{r train data normalization and wavelet clean up}
+# Función de normalización de las variables continuas y eliminación de coeficientes wavelet con valores NA. Se definen dos funciones, una para el set de training y otra para los sets de test y validación. La diferencia es que la de train devuelve vectores de medias y de desviaciones estándar que luego se usan como argumentos en las otras. De esta forma, el escalado y normalización se realiza con la misma media y desviación del set de entrenamiento para los otros dos datasets:
+
+normalize_train <- function(data) {
+   
+  # Identificar las columnas que empiezan por W y la columna 'RESULTADO'
+  wavelet_cols <- grep("^[WV]", colnames(data), value = TRUE)
+  result_col <- "QC_RESULT"
+  
+  if (!"CODIGO_PRUEBA" %in% names(data)) {
+    # Calcular medias y desviaciones estandar para cada variable:
+    
+    means <- data %>%
+    summarise(across(c(result_col, wavelet_cols),
+                     ~mean(., na.rm = T)))
+  
+    std_devs <- data %>% 
+    summarise(across(c(result_col, wavelet_cols),
+                     ~sd(., na.rm = T)))
+    
+    # Normalizar las columnas de resultado y coeficientes wavelet:
+    norm_data <- data %>%
+      mutate(across(c(result_col, wavelet_cols), scale))
+  
+    # Eliminar columnas con NAs:
+    complete_cols <- colnames(norm_data)[apply(norm_data, 2,
+                                             function(x)
+                                               !any(is.na(x)))]
+    norm_data <- norm_data[, complete_cols]
+  
+  } else {
+    
+    # Calcular medias y desviaciones estándar:
+    means <- data %>%
+      group_by(CODIGO_PRUEBA) %>%
+      summarise(across(c(result_col, wavelet_cols),
+                     ~mean(., na.rm = T)))
+  
+  std_devs <- data %>% 
+    group_by(CODIGO_PRUEBA) %>% 
+    summarise(across(c(result_col, wavelet_cols),
+                     ~sd(., na.rm = T)))
+  
+  # Normalizar las columnas de resultado y coeficientes wavelet
+  norm_data <- data %>% 
+  group_by(CODIGO_PRUEBA) %>% 
+  mutate(across(c(result_col, wavelet_cols), scale))%>%
+    ungroup()
+  
+  # Eliminar columnas con NAs y columna CODIGO_PRUEBA:
+  complete_cols <- colnames(norm_data)[apply(norm_data, 2,
+                                             function(x)
+                                               !any(is.na(x)))]
+  norm_data <- norm_data[, complete_cols]
+  norm_data <- norm_data[,-which(names(norm_data)==
+                                   "CODIGO_PRUEBA")]
+  }
+  
+  # Devolver el dataframe escalado y las medias y desviaciones estándar:
+  
+  return(list(scaled_data = as.data.frame(norm_data), 
+              means = means, stdev = std_devs))
+}
+```
+
+
+```{r val and test data normalization and wavelet clean up}
+# Función de normalización para los datos de validación y test, con eliminación de valores NA en los wavelets:
+
+norm_onehot_test_val <- function(data, means, stds) {
+  
+  # Eliminar columnas con NAs
+  complete_cols <- colnames(data)[apply(data, 2, function(x) !any(is.na(x)))]
+  data <- data[, complete_cols]
+  
+  if (!"CODIGO_PRUEBA" %in% names(data)) {
+    
+  # Identificar las columnas numéricas y seleccionarlas
+  wavelet_cols <- grep("^[WV]", colnames(data), value = TRUE)
+  result_col <- c("QC_RESULT")
+  
+  # Seleccionar medias y desviaciones de resultados y coeficientes   wavelet:
+  means_r <- unlist(means[result_col])
+  stds_r <- unlist(stds[result_col])
+  means_wl <- unlist(means[wavelet_cols])
+  stds_wl <- unlist(stds[wavelet_cols])
+  
+  # Normalizar las columnas de resultado y coeficientes wavelet usando las medias y desviaciones estándar de train suministradas:
+  
+  norm_data <- data %>% 
+  mutate(result_col = (.[result_col] - means_r) / stds_r,
+         wavelet_cols = (.[wavelet_cols] - means_wl)/ stds_wl,
+         .keep = "unused") %>%
+    select(-c(grep("^[WV]", colnames(data), value = TRUE),
+              "QC_RESULT")) %>%
+    unnest(cols = c(result_col, wavelet_cols)) %>%
+    relocate(QC_RESULT, .after = 1) %>%
+    relocate(starts_with(c("W", "V"), .after = 2))
+  
+  } else {
+  
+  # Identificar las columnas numéricas y seleccionarlas
+  wavelet_cols <- grep("^[WV]", colnames(data), value = TRUE)
+  result_col <- "QC_RESULT"
+  test_cols <- "CODIGO_PRUEBA"
+  cols <- c(result_col, wavelet_cols, test_cols)
+  
+  # Normalizar por cada prueba las columnas de resultado y coeficientes wavelet usando las medias y desviaciones estándar de train suministradas:
+  
+  norm_data <- data %>% 
+    merge(., 
+          merge(means[, cols], stds[,cols], by = "CODIGO_PRUEBA"),
+          by = "CODIGO_PRUEBA") %>%
+    group_by(CODIGO_PRUEBA) %>%
+    mutate(across(c(result_col, wavelet_cols),
+                  ~ (. - get(paste0(cur_column(), ".x"))) /
+                    get(paste0(cur_column(), ".y"))),
+           .keep = "unused") %>%
+    ungroup()
+  
+  norm_data <- norm_data[,-which(names(norm_data)==
+                                   "CODIGO_PRUEBA")]
+  }
+  
+  return(as.data.frame(norm_data))
+}
+
+```
+
+```{r, indexing function}
+# Función para crear un índice de casos únicos de combinaciones de ANALIZADOR, CÓDIGO_PRUEBA y NIVEL:
+
+unique_lab_cases <- function(df, categorical_vars) {
+  unique_groups <- unique(df[categorical_vars])
+  
+  index <- apply(unique_groups, 1, function(row) {
+    paste0(ifelse(row == 1, 1, 0), collapse = "")
+  })
+  unique_groups %<>% mutate(., index)
+  indexed_df <- df %>%
+    merge(unique_groups, ., by = colnames(unique_groups)
+          [-length(colnames(unique_groups))])
+  indexed_df <- indexed_df[, c(colnames(df), "index")]
+  
+  return(indexed_df)
+}
+```
+
+```{r, k length time series generator function}
+# Función para creación de lotes de series temporales de longitud k (lookback)
+
+create_lstm_data.2 <- 
+  function(data, lookback, delay, min_index, max_index,
+           shuffle = FALSE, batch_size, step = 1,
+           predseries) {
+  
+  if (is.null(max_index)) max_index <- nrow(data) - delay - 1
+  i <- min_index + lookback
+  function() {
+    if (shuffle) {
+      rows <- sample(c((min_index+lookback):max_index), 
+                     size = batch_size)
+    } else {
+      if (i + batch_size >= max_index)
+        i <<- min_index + lookback
+      rows <- c(i:min(i+batch_size, max_index))
+      i <<- i + length(rows)
+}
+    samples <- array(0, dim = c(length(rows),
+                                lookback / step,
+                                dim(data)[[-1]]))
+    targets <- array(0, dim = c(length(rows)))
+    for (j in 1:length(rows)) {
+      indices <- seq(rows[[j]] - lookback, rows[[j]],
+                     length.out = dim(samples)[[2]])
+      samples[j,,] <- data[indices, ]
+      targets[[j]] <- data[rows[[j]] + delay,predseries]
+    }
+    list(samples, targets)
+  }
+}
+
+```
+
+```{r training, validation and test dataset}
+# Se divide el dataset en 50% de datos para entrenamiento, 25% para test y 25% para validación. Para evitar fraccionar las unidades temporales diarias usamos percentiles de la secuencia temporal en días: 
+
+time_point_50 <- as.POSIXct(as.Date(
+  quantile(qc_data_sel_code$data[,1], 0.5)))
+
+time_point_75 <- as.POSIXct(as.Date(
+  quantile(qc_data_sel_code$data[,1], 0.75)))
+
+time_point_50
+time_point_75
+```
+
+
+```{r training dataset subsetting and normalization}
+# Muestra de entrenamiento:
+train <- qc_data_sel_code$data %>%
+  subset(qc_data_sel_code$data[,1] <= time_point_75) %>%
+  # Normalización del dataset y eliminación de coeficientes
+  # wavelet con valor NA:
+  normalize_train()
+
+```
+
+```{r validation dataset subsetting and normalization}
+# Muestra de validación:
+val <- qc_data_sel_code$data %>%
+  subset(
+    #data_sel_code$data[,1] > time_point_50 &
+    qc_data_sel_code$data[,1] > time_point_75) %>%
+  # Normalización del dataset y eliminación de coeficientes
+  # wavelet con valor NA:
+  norm_onehot_test_val(means = train$means, stds = train$stdev)
+```
+
+```{r test dataset subsetting and normalization}
+# Muestra de test:
+test <- data_sel_code$data %>%
+  subset(data_sel_code$data[,1] > time_point_75) %>%
+  # Normalización del dataset y eliminación de coeficientes
+  # wavelet con valor NA:
+  norm_onehot_test_val(means = train$means, stds = train$stdev)
+```
+
+```{r trainig set case grouping and k length time series creation}
+# Creación de series temporales de tamaño k con los datos de training:
+# Índices identificativos de analizador, código de reactivo y nivel:
+train_indx <- unique_lab_cases(train$scaled_data, categorical_vars = c(15:46))[,-1]
+
+# Extraemos lo índices para realizar un diccionario de traducción de índices a códigos únicos numéricos:
+index_values <- unique(train_indx[,"index"])
+index_dictionary <- data.frame(index = index_values)
+index_dictionary$code <- as.numeric(factor(index_values, levels = index_values))
+
+# Sustituimos los índices de train_indx por sus códigos:
+train_indx$index <- index_dictionary$code[match(train_indx$index, index_dictionary$index)]
+index_values <- unique(train_indx[,"index"])
+
+# Hiperparámetros para generar las series temporales:
+lookback <- 30 # Longitud de la secuencia previa al target.
+delay <- 1 # Escoge como target el valor k+1 en el futuro.
+batch_size <- 64 # Tamaño de batch.
+min_index <- 1 # Indice de partida de la serie temporal.
+predseries <- 1 # Posición en el dataset de la variable a predecir (QC_RESULT)
+
+# Creación de las series temporales de longitud k por categorías de combinaciones únicas de analizador, código de prueba y nivel de QC:
+ 
+train_k <- lapply(index_values, function(idx) {
+  create_lstm_data.2(
+    data = as.matrix(train_indx[train_indx[,"index"] == idx,
+                                - length(train_indx)]),
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = 
+      nrow(as.matrix(
+        train_indx[train_indx[,"index"] == idx,]))-delay-1,
+    predseries = predseries)
+})
+
+# Cálculo del número de steps de training:
+train_steps <- round((nrow(train$scaled_data)-lookback) / batch_size)
+```
+
+```{r Validation set case grouping and k length time series creation}
+val_indx <- unique_lab_cases(val, categorical_vars = c(15:46))[,-1]
+
+# Usamos el diccionario de códigos creado anteriormente: 
+val_indx$index <- index_dictionary$code[match(val_indx$index, index_dictionary$index)]
+index_values <- unique(val_indx[,"index"]) 
+
+val_k <- lapply(index_values, function(idx) {
+  create_lstm_data.2(
+    data = as.matrix(val_indx[val_indx[,"index"] == idx,
+                              - length(val_indx)]),
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = 
+      nrow(as.matrix(val_indx[val_indx[,"index"] == idx,]))-delay-1,
+    predseries = predseries)
+})
+
+# Cálculo del número de steps de validación:
+val_steps <- round((nrow(val)-lookback) / batch_size)
+```
+
+```{r custom generator}
+# Funciones generadoras de series para train y validation, Estas funciones generan de manera indefinida series con los datos de entrenamiento y validación, usando de manera consecutiva las funciones generadoras almacenadas junto a los subconjuntos de datos con las 160 posibles combinaciones de ANALIZADOR, CÓDIGO_PRUEBA y NIVEL de QC sobre los que cada una tiene que actuar. Si se llega a la generación número 160 se repite el proceso desde la primera.  
+
+index_train <- 1
+
+train_gen <- function() {
+  if (index_train > length(train_k)) {
+      index_train <<- 1
+  }
+    
+  sequence <- train_k[[index_train]]()
+  index_train <<- index_train + 1
+  
+  return(sequence)
+}
+
+index_val <- 1
+
+val_gen <- function() {
+  if (index_val > length(val_k)) {
+    index_val <<- 1
+  }
+
+  sequence <- val_k[[index_val]]()
+  index_val <<- index_val + 1
+  
+  return(sequence)
+}
+
+```
+
+```{r common sense baseline}
+# Función para calcular el MAE promedio para un modelo basado en predecir los targets del set de validación con las mismas muestras de validación, mediante la iteración de lotes de muestras. Esto sería equivalente a un modelo que predice el resultado futuro del QC con el actual y constituye el punto de partida para mejorar (common sense baseline).
+
+evaluate_naive_method <- function() {
+  batch_maes <- c()
+  for (step in 1:val_steps) {
+    c(samples, targets) %<-% val_gen()
+    preds <- samples[,dim(samples)[[2]],2]
+    mae <- mean(abs(preds - targets))
+    batch_maes <- c(batch_maes, mae)
+  }
+  print(mean(batch_maes))
+}
+
+maes <- evaluate_naive_method()
+cbind(train$stdev[[1]], maes*train$stdev[[2]])
+
+```
+
+
+
+```{r model definition}
+set.seed(123)
+
+model_2 <- keras_model_sequential() %>%
+    layer_lstm(units = 32, dropout=0.1, recurrent_dropout=0.5,
+              #return_sequences = TRUE,
+              input_shape = list(NULL,
+                                 dim(train$scaled_data[,-1])[[-1]])) %>%
+    #layer_lstm(units = 64, activation="relu", 
+     #          dropout=0.1, recurrent_dropout=0.5) %>%
+    layer_dense(units = 1)
+```
+
+```{r custom rmse metrics function}
+
+rmse <- function(y_pred, y_true) {
+  backend <- keras::backend()
+  sq_diff <- backend$square(y_pred - y_true)
+  mean_sq_diff <- backend$mean(sq_diff, axis = -1)
+  rmse_value <- backend$sqrt(mean_sq_diff)
+  rmse_value <- backend$cast(rmse_value, dtype = "float32")
+  rmse_value
+}
+```
+
+
+```{r model compilation and callbacks}
+model_2 %>% compile(
+    optimizer = "rmsprop",
+    loss="mse", 
+    metrics = list("mae",
+                   "mse"
+                   #rmse
+                   )
+)
+
+callbacks <- list(
+  callback_model_checkpoint(file.path(resultsdir, "lstm_2.keras",
+                                     save_best_only = TRUE)))
+```
+
+
+```{r model fit}
+history_2 <- model_2 %>% fit_generator(
+  generator = train_gen,
+  steps_per_epoch = train_steps,
+  epochs = 20,
+  validation_data = val_gen,
+  validation_steps = val_steps,
+  callbacks = callbacks
+)
+
+
+plot(history_2)
+```
+
+```{r}
+
+# Evaluación del modelo:
+path <- file.path(resultsdir, "lstm_2.keras")
+model <- load_model_tf(path) 
+sprintf("Test MAE: %.2f", evaluate(model, test_ds)["mae"]) 
+ 
+```
+
+```{r model evaluation, eval=FALSE}
+# Carga del mejor modelo y evaluación:
+model <- load_model_tf("lstm_1.keras")
+sprintf("Test MAE: %.2f", evaluate(model, test_ds)["accuracy"])
+
+```
+
+
+```{r loop, eval=FALSE}
+# Iniciar el loop que se ejecutará periódicamente para leer los archivos csv en la fase de puesta en producción
+while (TRUE) {
+  tic() # iniciar contador de tiempo
+  
+  # Leer los archivos Excel de Lotes y crear un data frame    feautures
+  features <- read_lot()
+    
+  
+```
+
+```{r end loop, eval=FALSE}
+
+  
+  # Esperar el intervalo de tiempo definido antes de la siguiente lectura
+  Sys.sleep(intervalo - toc())
+}
+
+```
+
