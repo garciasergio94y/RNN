@@ -1,7 +1,7 @@
 ---
 title: 'Aplicación del aprendizaje automático al laboratorio de diagnóstico clínico:
   Detección temprana de series analíticas fuera de control en análisis inmunoquímicos
-  de muestras de sangre mediante algoritmos de Machine Learning'
+  de muestras de sangre mediante algoritmos de Machine Learning' 
 author: "Sergio García Muñoz"
 date: "`r Sys.Date()`"
 output: html_document
@@ -11,7 +11,9 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+# MODELO LSTM_onehot_QC
+
+```{r, include=FALSE}
 # Definir los nombres de los paquetes que se desean instalar
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
@@ -316,7 +318,7 @@ merge_qc_events <- function(df1, df2){
 
 Funciones para aplicar la transformación wavelet a la variable QC_RESULT para cada grupo de técnica. La función ```wt``` calcula la transformación wavelet de tipo Maximal Overlap Discrete Wavelet Transformation (MODWT), que devuelve los coeficientes de wavelet y los coeficientes de escalado. La función ```wavelet_tr``` aplica la transformación a un conjunto de datos agrupado por una determinada variable.
 
-```{r wavelet transformation}
+```{r wavelet function}
 wt <- function(x, wavefun){
   mod <- modwt(x, wavefun, boundary = "periodic")
   return(mod)
@@ -389,7 +391,7 @@ normalize_train <- function(data) {
 }
 ```
 
-## Función ```norm_onehot_test_val```.
+## Función ```norm_test_val```.
 
 Función de normalización para los datos de validación y test, con eliminación de valores NA en los wavelets.
 
@@ -627,7 +629,7 @@ val_gen <- function() {
 
 ### Aleatorizadas:
 
-```{r custom generator}
+```{r random custom generator}
 train_gen <- function() {
   indices <- sample(length(train_k))
   
@@ -673,21 +675,21 @@ val_gen <- function() {
 
 # Carga y preprocesado de los datos.
 
-```{r training and testing data read}
+```{r training and testing data read, include=FALSE}
 # Lectura de los datos que se usarán para training y test
 
   #Leer los archivos de eventos de QC y crear el data frame events:
   events <- read_event()
-  head(events)
+
   
   #Leer los archivos de resultados de QC y crear el data frame qc_results:
   qc_results <- read_qc()
-  head(qc_results)
+  
   qc_results %<>% qc_level()
   qc_results <- qc_results %>% merge_date()
-  head(qc_results)
+  
   qc_results <- figure_ext(qc_results, 3)
-  head(qc_results)
+
 
   
 ```
@@ -736,7 +738,7 @@ time_point_75
 ```
 
 
-```{r training dataset subsetting and normalization}
+```{r training dataset subsetting and normalization, include=FALSE}
 # Muestra de entrenamiento:
 train_n <- qc_data_sel_wl %>%
   subset(.[[1]] <= time_point_75) %>%
@@ -773,7 +775,7 @@ test <- qc_data_sel_wl %>%
   subset(.[[1]] > time_point_75) %>%
   # Normalización del dataset y eliminación de coeficientes
   # wavelet con valor NA:
-  norm_onehot_test_val(means = train$means, stds = train$stdev)
+  norm_test_val(means = train$means, stds = train$stdev)
 ```
 
 ```{r trainig set case grouping and k length time series creation}
@@ -873,7 +875,7 @@ cbind(train_n$stdev[[3]], maes*train_n$stdev[[3]])
 
 
 
-```{r model definition}
+```{r model definition, eval=FALSE}
 set.seed(123)
 
 model_2 <- keras_model_sequential() %>%
@@ -899,7 +901,7 @@ rmse <- function(y_pred, y_true) {
 ```
 
 
-```{r model compilation and callbacks}
+```{r model compilation and callbacks, eval=FALSE}
 model_2 %>% compile(
     optimizer = "rmsprop",
     loss="mse", 
@@ -915,7 +917,7 @@ callbacks <- list(
 ```
 
 
-```{r model fit}
+```{r model fit, eval=FALSE}
 history_2 <- model_2 %>% fit_generator(
   generator = train_gen,
   steps_per_epoch = train_steps,
@@ -929,7 +931,7 @@ history_2 <- model_2 %>% fit_generator(
 plot(history_2)
 ```
 
-```{r}
+```{r, eval=FALSE}
 
 # Evaluación del modelo:
 path <- file.path(resultsdir, "lstm_2.keras")
