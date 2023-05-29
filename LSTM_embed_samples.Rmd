@@ -6,6 +6,7 @@ author: "Sergio García Muñoz"
 date: "`r Sys.Date()`"
 output: html_document
 ---
+# LSTM_embedd_samples
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -13,7 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Instalación y carga de paquetes requeridos:
 
-```{r}
+```{r, include=FALSE}
 # Definir los nombres de los paquetes que se desean instalar
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
@@ -271,7 +272,7 @@ create_lstm_data.1 <-
 
 Funciones generadoras globales de series para train y validation, Estas funciones generan de manera indefinida series con los datos de entrenamiento y validación, usando de manera consecutiva las funciones generadoras individuales almacenadas junto a los subconjuntos de datos con las posibles combinaciones de variables categóricas. Si se llega a la generación última se repite el proceso desde la primera. Incluyen un TryCatch para evitar la parada del modelo si se encuentran secuencias de datos vacías.  
 
-```{r custom generator}
+```{r random custom generator}
 train_gen <- function() {
   indices <- sample(length(train_k))
   
@@ -315,7 +316,7 @@ val_gen <- function() {
 ```
 
 ## Función de generación de validación continua:
-```{r}
+```{r continous generator}
 train_gen <- function() {
   indices <- sample(length(train_k))
   
@@ -340,7 +341,7 @@ train_gen <- function() {
 
 # Carga y preprocesado de los datos
 
-```{r data_sel_tr read csv}
+```{r data_sel_tr read csv, eval=FALSE}
 
 data_sel_tr <- read.csv(file.path(resultsdir, "data_sel_tr"),
                         sep = ",")
@@ -366,7 +367,7 @@ time_point_75
 
 # Muestra de entrenamiento:
 train <- data_sel_tr %>%
-  subset(.[,1] <= time_point_50) 
+  subset(.[,1] <= time_point_75) 
 
 # Muestra de validación:
 val <- data_sel_tr %>%
@@ -581,14 +582,14 @@ embedding_out4 <- inp_cat_4 %>%
 
 ```
 
-```{r, concatenate, lstm and output layers}
+```{r, concatenate, lstm and output layers, eval=FALSE}
 
 # Definir la capa de concatenación
 concat_layer <- layer_concatenate(list(embedding_out1,
                                        embedding_out2,
                                        embedding_out3,
                                        embedding_out4)) %>%
-  layer_reshape(target_shape = c(NULL, k, p -  + sum_embeddings))
+  layer_reshape(target_shape = c(NULL, k, p - sum_embeddings))
 
 # Definir la capa LSTM:
 lstm_layer_1 <- layer_lstm(units = 64,
@@ -619,7 +620,7 @@ output_layer <- concat_layer %>%
 ```
 
 
-```{r, model definition and compilation. Callbacks}
+```{r, model definition and compilation. Callbacks, eval=FALSE}
 # Crear modelo
 model <- keras_model(inputs = list(inp1, inp2, inp3, inp4),
                      outputs = output_layer)
@@ -639,7 +640,7 @@ callbacks <- list(
 
 ```
 
-```{r, model training}
+```{r, model training, eval=FALSE}
 model %>% fit_generator(train_data, steps_per_epoch = n_samples_train, validation_data = val_data, validation_steps = n_samples_val, epochs = 10)
 
 ```
@@ -684,16 +685,6 @@ model <- load_model_tf("lstm_1.keras")
 sprintf("Test MAE: %.2f", evaluate(model, test_ds)["accuracy"])
 
 ```
-
-La medida F1 es una métrica de evaluación de modelos de clasificación que combina la precisión y el recall de un modelo en un único valor. Esta medida es especialmente útil cuando el conjunto de datos está desequilibrado y hay una gran cantidad de falsos positivos o falsos negativos.
-
-La fórmula para calcular F1 es:
-
-F1 = 2 * (precisión * recall) / (precisión + recall)
-
-donde la precisión se refiere a la proporción de verdaderos positivos en relación con todos los elementos que el modelo ha clasificado como positivos, y el recall se refiere a la proporción de verdaderos positivos en relación con todos los elementos que son realmente positivos en el conjunto de datos. 
-El valor de F1 oscila entre 0 y 1, donde un valor de 1 indica una precisión y un recall perfectos, mientras que un valor de 0 indica que el modelo no ha acertado ninguna predicción positiva.
-
 
 ```{r loop, eval=FALSE}
 # Iniciar el loop que se ejecutará periódicamente para leer los archivos csv en la fase de puesta en producción
