@@ -345,9 +345,6 @@ wavelet_tr <- function(df) {
   # Sustituir valores NA en los coeficientes wavelet por un valor arbitrario -99999 para su posterior filtrado
   wavelet_cols <- grep("^[WV]", colnames(df_wavelet), value = TRUE)
   
-  df_wavelet <- df_wavelet %>%
-    mutate(across(all_of(wavelet_cols),
-                  ~ ifelse(is.na(.), -99999, .)))
   
   return(df_wavelet)
 }
