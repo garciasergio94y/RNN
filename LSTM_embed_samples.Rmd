@@ -341,7 +341,7 @@ train_gen <- function() {
 
 # Carga y preprocesado de los datos
 
-```{r data_sel_tr read csv, eval=FALSE}
+```{r data_sel_tr read csv}
 
 data_sel_tr <- read.csv(file.path(resultsdir, "data_sel_tr"),
                         sep = ",")
@@ -665,11 +665,11 @@ evaluate_naive_method <- function(data_df, ctrl_colname) {
 }
 
 # Cálculo de accuracy basado en predecir con la moda:
-accuracy_train <- evaluate_naive_method(train$scaled_data, "CTRL")
-accuracy_test <- evaluate_naive_method(test, "CTRL")
+accuracy_train <- evaluate_naive_method(train_code$data, "CTRL")
+accuracy_test <- evaluate_naive_method(val_code$data, "CTRL")
 
 sprintf("Training accuracy: %.2f", accuracy_train)
-sprintf("Test accuracy: %.2f", accuracy_test)
+sprintf("Validation accuracy: %.2f", accuracy_test)
 
 ```
 
