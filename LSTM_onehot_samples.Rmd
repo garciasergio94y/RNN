@@ -811,13 +811,13 @@ val_gen <- function() {
 ```{r training and testing data read}
 
   # Leer los archivos Excel de Lotes y crear un data frame  feautures
-  features <- rbind(read_lot(), 
-                    read_lotX())
+  features <- unique(rbind(read_lot(), 
+                    read_lotX()))
   features <- features[order(features[[1]]), ]
   head(features)
   
   #Leer los archivos de eventos de QC y crear el data frame events:
-  events <- read_event()
+  events <- unique(read_event())
   head(events)
   
   #Leer los archivos de resultados de QC y crear el data frame qc_results:
@@ -871,7 +871,7 @@ targets_2 <- featqc_event %>%
   mutate(CTRL = 1)
 
 # Criterio 3: Para cada unidad temporal de TIEMPO_QC, ANALIZADOR, CODIGO_PRUEBA y LOTE_REACTIVO:
-# >=2 flags 12s o 13s dentro del día
+# >=2 flags 12s, 12.5s o 13s dentro del día
 
 targets_3 <- featqc_event %>%
   mutate(DIA = as.Date(TIEMPO_QC)) %>%
@@ -1065,7 +1065,7 @@ time_point_75
 
 # Muestra de entrenamiento:
 train <- data_sel_tr %>%
-  subset(.[,1] <= time_point_50) 
+  subset(.[,1] <= time_point_75) 
 
 # Muestra de validación:
 val <- data_sel_tr %>%
@@ -1096,133 +1096,15 @@ val_code <- code_cat_var(val_n)
 
 ```
 
-## Redistribución temporal de casos y oversampling.
-
-```{r}
-# Crear una función para distribuir los casos con CTRL=1 de manera uniforme en el tiempo
-CTRL_distribute <- function(data, ratio) {
-  # Obtener las fechas con CTRL=1
-  data$rounded_date <- floor_date(as.Date(data[[1]]))
-  dates_ctrl_1 <- unique(data[data[["CTRL"]] == 1, "rounded_date"])
-  
-  # Calcular la cantidad de casos a agregar en cada fecha
-  add_cases <- round(ratio * nrow(data) / length(dates_ctrl_1))
-  
-  # Crear una nueva columna para asignar las fechas distribuidas       uniformemente
-  data$date_dist <- data$rounded_date
-  
-  # Distribuir los casos uniformemente en el tiempo
-  for (date in dates_ctrl_1) {
-    index_date <- which(data$rounded_date == date)
-    index_date_add <- sample(index_date,
-                             add_cases, replace = TRUE)
-    unique_dates <- sample(unique(data$rounded_date),
-                           add_cases, replace = TRUE)
-    data$date_dist[index_date_add] <- unique_dates
-  }
-  
-  # Eliminar columnas temporales
-  data$date_dist <- NULL
-  data$rounded_date <- NULL
-  
-  return(data)
-}
-
-# Aplicar la función para distribuir las fechas uniformemente:
-
-up_train <- train_code$data
-up_train <- CTRL_distribute(up_train, 1)
-
-# Convertir variable numérica CTRL a factor:
-up_train$CTRL %<>% as.factor()
-
-# Aplicar upSample en el dataframe modificado
-"%ni%" <- Negate("%in%")
-up_train_up <- upSample(
-  x = up_train[,colnames(up_train) %ni% "CTRL"], 
-  y = up_train$CTRL)
-names(up_train_up)[ncol(up_train_up)] <- "CTRL"
-
-# Verificar los resultados
-table(up_train_up$CTRL)
-
-# Plot tras oversampling de resultados por CODIGO_PRUEBA clasificados por estado de CTRL:
-ggplot(up_train , mapping = aes(x=TIEMPO_MUESTRA,
-                                    y=RESULTADO,
-                                    color = CTRL)) +
-         geom_point(size=0.25) +
-         #(~CODIGO_PRUEBA, scales = "free", ncol = 4)+    
-         theme(strip.background = element_blank()) +
-         theme(strip.text = element_text(size=8)) +
-         scale_color_manual(values = c("blue", "red"),
-                             name = "CTRL")
-
-ggsave(file.path(figuresdir, "QC_state_over_TSH.pdf"), width = 30, height = 20, units = "cm", dpi = 300)
-
-# Devolver el factor a variable numérica: 
-
-up_train_up$CTRL <- as.integer(up_train_up$CTRL) - 1 
-train_code$data <- up_train_up
-```
-
-
-```{r training oversampling}
-# Oversampling del dataset de training de la clase minoritaria
-
-up_train <- as.data.frame(train_code$data)
- 
-# Convertir variable numérica CTRL a factor:
-up_train$CTRL %<>% as.factor()
-
-# Oversampling:
-"%ni%" <- Negate("%in%")
-train_bal <- caret::upSample(
-  x = up_train[,colnames(up_train) %ni% "CTRL"], 
-  y = up_train$CTRL)
-names(train_bal)[ncol(train_bal)] <- "CTRL"
-
-# Devolver el factor a variable numérica: 
-
-train_bal$CTRL <- as.integer(train_bal$CTRL) - 1 
-train_code$data <- train_bal
-
-table(train_code$data$CTRL)
-
-# Plot resultados por prueba divididos por valor de la variable de proceso controlado tras oversampling:
-up_train <- as.data.frame(train_n$scaled_data)
- 
-# Convertir variable numérica CTRL a factor:
-up_train$CTRL %<>% as.factor()
-
-# Oversampling:
-train_bal <- caret::upSample(
-  x = up_train[,colnames(up_train) %ni% "CTRL"], 
-  y = up_train$CTRL)
-names(train_bal)[ncol(train_bal)] <- "CTRL"
-
-# Plot tras oversampling de resultados por CODIGO_PRUEBA clasificados por estado de CTRL:
-ggplot(train_bal , mapping = aes(x=TIEMPO_MUESTRA,
-                                    y=RESULTADO,
-                                    color = CTRL)) +
-         geom_point(size=0.25) +
-         facet_wrap(~CODIGO_PRUEBA, scales = "free", ncol = 4)+    
-         theme(strip.background = element_blank()) +
-         theme(strip.text = element_text(size=8)) +
-         scale_color_manual(values = c("blue", "red"),
-                             name = "CTRL")
-
-ggsave(file.path(figuresdir, "QC_state_over_TSH.pdf"), width = 30, height = 20, units = "cm", dpi = 300)
-```
-
 ## Preparación de series temporales de longitud k agrupadas por categorías y por fechas en los datasets de training y validación. 
 
 ```{r trainig set case grouping and k length time series creation}
 # Creación de series temporales de tamaño k con los datos de training:
 
-# Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de training usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir (en este caso el analizador): 
+# Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de training usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir (en este caso el código de prueba): 
 
 train_indx <- unique_lab_cases(train_code$data,
-                               categorical_vars = c(28:29))
+                               categorical_vars = c(30:56))
 
 # Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
 code_values <- unique(train_indx[,"code"])
