@@ -7,13 +7,15 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
+# LSTM_onehot_samples
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Instalación y carga de paquetes requeridos:
 
-```{r}
+```{r, include=FALSE}
 # Definir los nombres de los paquetes que se desean instalar
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
@@ -31,22 +33,6 @@ install_packages <- function(package) {
 lapply(packages, install_packages)
 
 ```
-
-Este código utiliza las librerías readr, readxl, purrr, dplyr, filesstrings, stringr, tidyr, lubridate, tictoc, tensorflow y keras.
-
-En una primera parte se leen los archivos excel de lotes (contienen las variables medidas de interés, destacando el código de la prueba realizada, la concentración medida, fecha y hora, analizador por el que se ha realizado la medición y código del paquete de reactivo empleado. Esta información se guarda en el dataframe features.
-A continuación se leen los archivos de eventos, que contienen para cada código de prueba y analizador, la fecha y hora a la que se ha producido un evento de interés. En nuestro caso interesan los eventos de calibración, que son los que pueden indicar que el proceso ha pasado a estar fuera de control. Esta información se guarda en el dataframe events.
-A parte, también se leen los archivos de resultados del control de calidad, con tres niveles de concentración por técnica, con variables que indican el analizador y el lote de reactivo empleado, así como la fecha y hora a la que se ha llevado a cabo la medición del control.  Se guardan en el dataframe qc_results.
-
-La lectura y procesado de estos datos ha requerido trabajar con librerías como lubridate y hacer una manipulación bastante importante de los mismos, como extracción de variables numéricas y alfanuméricas de cadenas de texto o a partir de nombres de archiovos, manejo de fechas en distintos formatos que se han estandarizado a POSIXct en todo el trabajo, fusión y separación de variables etc. 
-
-Seguidamente se han fusionado los dataframes, con ayuda de varias funciones, dejando todos los casos presentes en features y aquellos casos de events y qc_results que presentaban matching con las entradas de features (left outer join). Este join ha tenido en cuenta que las features de un día D deben predecir el estado del control de calidad en el día D+1. El dataframe producto del join es featqc_event.
-
-Una vez fusionados los datos, se han aplicado tres criterios para generar la señal de proceso fuera de control (variable CTRL), teniendo en cuenta los flags presentes en qc_results y los eventos de calibración presentes en events. Se han crado así 3 dataframes targets que igualmente se han unificado en uno solo. 
-
-Finalmente, se ha generado una lista llamada data_sel_code con todas las observaciones ya presentes en data y sus correspondienes targets asociados. Se han codificado las variables alfanuméricas mediante one-hot y las contínuas se han normalizado. Dentro de data_sel_code, levels contiene los niveles de todos los factores codificados, mientras que data_sel_code$data contiene los datos codificados.
-
-Este dataset se ha dividido en datos de entrenamiento y de test teniendo en cuenta evitando usar meros porcentajes, ya que en estos datos es importante mantener la estructura de cada serie temporal, formada por las medidas del día de características asociadas a las medidas al día siguiente del control de calidad. Por eso, para la divisió se han transformado las fechas y horas en solo fechas y se ha aplicado el percentil 75 para dividir los datos en training y test, de manera que el corte se haga en un día completo sin que las mediciones de un mismo día se separen.
 
 ```{r}
 require(readr)
@@ -439,7 +425,7 @@ merge_featqc_event <- function(df1, df2, CLC=NULL){
 
 Función para la aplicación de la transformación wavelet de tipo Maximal Overlap Discrete Wavelet Transformation (MODWT) que devuelve los coeficientes de wavelet y los coeficientes de escalado.
 
-```{r wavelet transform function}
+```{r wavelet transform function definition}
 wt <- function(x, wavefun){
   mod <- modwt(x, wavefun, boundary = "periodic")
 return(mod)
@@ -450,7 +436,7 @@ return(mod)
 
 Aplica la transformación wavelet a un dataframe df agrupado según variables agrupadas y devuelve un dataframe con los coeficientes y escalas para cada observación.
 
-```{r wavelet transform function}
+```{r wavelet transform}
 
 wavelet_tr <- function(df) {
   # Aplicar la función wt a cada grupo por separado
@@ -584,7 +570,7 @@ norm_test_val <- function(data, means, stds) {
 
 Convierte las variables categóricas tipo string en vectores numéricos y realiza una codificción one-hot, creando una lista que retiene en un vector la información de los niveles de los factores. 
 
-```{r one-hot coding}
+```{r one-hot coding functionq1}
 
 code_cat_var <- function(data) {
   # Eliminación de la columna CODIGO_PRUEBA si solo tiene una          categoría:
@@ -760,7 +746,7 @@ val_gen <- function() {
 
 ### Aleatorizadas:
 
-```{r custom generator}
+```{r random custom generator}
 train_gen <- function() {
   indices <- sample(length(train_k))
   
@@ -808,7 +794,7 @@ val_gen <- function() {
 
 ## Lectura de los datos de medidas de muestras y características (features), eventos de QC y QC.
 
-```{r training and testing data read}
+```{r training and testing data read, include=FALSE}
 
   # Leer los archivos Excel de Lotes y crear un data frame  feautures
   features <- unique(rbind(read_lot(), 
@@ -822,11 +808,11 @@ val_gen <- function() {
   
   #Leer los archivos de resultados de QC y crear el data frame qc_results:
   qc_results <- read_qc()
-  head(qc_results)
+
   qc_results <- qc_results %>% merge_date()
-  head(qc_results)
+
   qc_results <- figure_ext(qc_results, 3)
-  head(qc_results)
+
 
   
 ```
@@ -836,9 +822,9 @@ val_gen <- function() {
 ```{r merge dataframe}
 # Unir los tres dataframes features, qc_results y events en uno solo. Selección de pruebas opcional.
 feat_qc <- merge_feat_qc(features, qc_results) 
-head(feat_qc)
+
 featqc_event <- merge_featqc_event(feat_qc, events,)
-head(featqc_event)
+
 ```
 ## Creación de los conjuntos de targets por selección según criterios específicos.
 
@@ -904,7 +890,6 @@ data <- merge(featqc_event,
   mutate(CTRL = replace(CTRL, is.na(CTRL), 0)) %>%
   select(colnames(featqc_event), CTRL)
 
-head(data)
 ```
 ## Selección de características de interés y transformación wavelet de los datos de resultados de medidas.
 
@@ -948,6 +933,7 @@ data_sel_tr <- data_wavelet %>%
   select(-"PACIENTE_EDAD") %>%
   replace_na(list(EDAD_BIN = "Desconocido"))
 data_sel_tr <- as.data.frame(data_sel_tr)
+head(data_sel_tr)
 ```
 
 ## Guardado de datos en archivo csv.
@@ -960,7 +946,7 @@ write.csv(data_sel_tr, row.names = F,
 
 ## Carga de datos desde archivo csv.
 
-```{r data_sel_tr read csv}
+```{r data_sel_tr read csv, eval=FALSE}
 
 data_sel_tr <- read.csv(file.path(resultsdir, "data_sel_tr"),
                         sep = ",")
@@ -1080,7 +1066,7 @@ val <- data_sel_tr %>%
 
 ## Normalización de los datasets.
 
-```{r datasets normalization}
+```{r datasets normalization, include=FALSE}
 train_n <- normalize_train(train)
 
 val_n <- norm_test_val(val, means = train_n$means,
@@ -1105,6 +1091,7 @@ val_code <- code_cat_var(val_n)
 
 train_indx <- unique_lab_cases(train_code$data,
                                categorical_vars = c(30:56))
+head(train_indx)
 
 # Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
 code_values <- unique(train_indx[,"code"])
@@ -1169,7 +1156,7 @@ train_steps <- round((nrow(train_code$data) - lookback) / batch_size)
 ```{r Validation set case grouping and k length time series creation}
 # Creación de los índices identificativos de combinaciones de variables categóricas para el set de validación:
 val_indx <- unique_lab_cases(val_code$data, 
-                             categorical_vars = c(28:29))
+                             categorical_vars = c(30:56))
 
 # Usamos el diccionario de códigos creado anteriormente: 
 val_indx$index <- code_dictionary$index[match(val_indx$code,
@@ -1188,6 +1175,8 @@ combinations_val <- expand.grid(code = code_values,
 combinations_val$index <-
   code_dictionary$index[match(combinations_val$code,
                               code_dictionary$code)]
+head(val_indx)
+head(combinations_val)
 
 # Creación de lista de funciones generadoras del dataset de validación:
 
@@ -1260,7 +1249,7 @@ callbacks <- list(
 ```
 
 
-```{r model fit}
+```{r model fit, eval=FALSE}
 history_1 <- model_1 %>% fit_generator(
   generator = train_gen,
   steps_per_epoch = train_steps,
@@ -1274,7 +1263,7 @@ history_1 <- model_1 %>% fit_generator(
 plot(history_1)
 ```
 
-```{r}
+```{r, eval=FALSE}
 
 # Evaluación del modelo:
 path <- file.path(resultsdir, "lstm_1.keras")
@@ -1316,15 +1305,6 @@ sprintf("Training naive accuracy: %.2f", accuracy_train)
 sprintf("Validation naive accuracy: %.2f", accuracy_val)
 
 ```
-
-La medida F1 es una métrica de evaluación de modelos de clasificación que combina la precisión y el recall de un modelo en un único valor. Esta medida es especialmente útil cuando el conjunto de datos está desequilibrado y hay una gran cantidad de falsos positivos o falsos negativos.
-
-La fórmula para calcular F1 es:
-
-F1 = 2 * (precisión * recall) / (precisión + recall)
-
-donde la precisión se refiere a la proporción de verdaderos positivos en relación con todos los elementos que el modelo ha clasificado como positivos, y el recall se refiere a la proporción de verdaderos positivos en relación con todos los elementos que son realmente positivos en el conjunto de datos. 
-El valor de F1 oscila entre 0 y 1, donde un valor de 1 indica una precisión y un recall perfectos, mientras que un valor de 0 indica que el modelo no ha acertado ninguna predicción positiva.
 
 
 ```{r loop, eval=FALSE}
