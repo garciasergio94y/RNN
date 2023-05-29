@@ -448,7 +448,7 @@ return(mod)
 
 ## Función ```wavelet_tr```.
 
-Aplica la transformación wavelet a un dataframe df agrupado según variables group y devuelve un dataframe con los coeficientes y escalas para cada observación.
+Aplica la transformación wavelet a un dataframe df agrupado según variables agrupadas y devuelve un dataframe con los coeficientes y escalas para cada observación.
 
 ```{r wavelet transform function}
 
@@ -471,10 +471,6 @@ wavelet_tr <- function(df) {
   
   # Sustituir valores NA en los coeficientes wavelet por un valor arbitrario -99999 para su posterior filtrado
   wavelet_cols <- grep("^[WV]", colnames(df_wavelet), value = TRUE)
-  
-  df_wavelet <- df_wavelet %>%
-    mutate(across(all_of(wavelet_cols),
-                  ~ ifelse(is.na(.), -99999, .)))
   
   return(df_wavelet)
 }
