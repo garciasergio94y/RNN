@@ -449,7 +449,9 @@ norm_test_val <- function(data, means, stds) {
     unnest(c(WAVELETS.st, RESULTADO.st)) %>%
     relocate(starts_with("QC_"), .after = 1) %>%
     relocate(starts_with("W"), .after = 2) %>%
-    relocate(starts_with("V"), .before = ANALIZADOR) 
+    relocate(starts_with("V"), .before = ANALIZADOR) %>%
+    mutate(across(wavelet_cols,
+                           ~ifelse(is.na(.), -99999, .)))
     
   names(norm_data)[2]<-result_col
   
@@ -551,9 +553,9 @@ create_lstm_data.2 <-
                                 lookback / step,
                                 dim(data)[[-1]]))
     targets <- array(0, dim = c(length(rows)))
+    print(dim(targets))
     for (j in 1:length(rows)) {
-      indices <- seq(rows[[j]] - lookback, rows[[j]],
-                     length.out = dim(samples)[[2]])
+      indices <- (rows[[j]] - lookback + 1):(rows[[j]])
       samples[j,,] <- data[indices, ]
       targets[[j]] <- data[rows[[j]] + delay,predseries]
     }
@@ -723,6 +725,24 @@ write.csv(qc_data_sel_wl, row.names = F,
 
 ```
 
+```{r autocorrelation, partial autocorrelation an ARMA}
+
+library(gridExtra)
+
+qc_data_sel_wl %>%
+  group_by(CODIGO_PRUEBA, NIVEL) %>%
+  nest() %>%
+  mutate(acf_plots = map(data, ~ {
+    acf(.x$QC_RESULT, type = "correlation")
+    title(main = paste("NIVEL:", unique(NIVEL), 
+                       "CLC:", unique(CODIGO_PRUEBA)),
+          outer = T)
+  })) %>%
+  pull(acf_plots) %>%
+  grid.arrange(grobs = ., ncol = 10) 
+
+```
+
 
 ```{r training, validation and test dataset}
 # Se divide el dataset en 50% de datos para entrenamiento, 25% para test y 25% para validación. Para evitar fraccionar las unidades temporales diarias usamos percentiles de la secuencia temporal en días: 
@@ -799,18 +819,19 @@ index_values <- unique(train_indx[,"index"])
 train_indx$code <- NULL
 
 # Hiperparámetros para generar las series temporales:
-lookback <- 30 # Longitud de la secuencia previa al target.
+lookback <- 10  # Longitud de la secuencia previa al target.
 delay <- 1 # Escoge como target el valor k+1 en el futuro.
-batch_size <- 100 # Tamaño de batch.
+batch_size <- 400 # Tamaño de batch.
 min_index <- 1 # Indice de partida de la serie temporal.
 predseries <- 1 # Posición en el dataset de la variable a predecir (QC_RESULT)
+
 
 # Creación de las series temporales de longitud k por categorías de combinaciones únicas de analizador, código de prueba y nivel de QC:
  
 train_k <- lapply(index_values, function(idx) {
   create_lstm_data.2(
-    data = as.matrix(train_indx[train_indx[,"index"] == idx,
-                                - length(train_indx)]),
+    data = as.matrix(train_indx[train_indx[,"index"] == idx, 1]),
+                                #-c(1, length(val_indx))]),
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
@@ -839,8 +860,8 @@ val_indx$code <- NULL
 
 val_k <- lapply(index_values, function(idx) {
   create_lstm_data.2(
-    data = as.matrix(val_indx[val_indx[,"index"] == idx,
-                              - length(val_indx)]),
+    data = as.matrix(val_indx[val_indx[,"index"] == idx, 1]),
+                              #-c(1, length(val_indx))]),
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
@@ -878,11 +899,19 @@ cbind(train_n$stdev[[3]], maes*train_n$stdev[[3]])
 ```{r model definition, eval=FALSE}
 set.seed(123)
 
+nkp <- dim(train_gen()[[1]])
+
+k <- nkp[2]
+p <- nkp[3]
+
+input_shape <- c(NA, k, p)
+
 model_2 <- keras_model_sequential() %>%
-    layer_lstm(units = 32, dropout=0.1, recurrent_dropout=0.5,
+   layer_masking(mask_value = -99999, input_shape = c(NULL, k, p)) %>%
+   layer_lstm(units = 64, dropout=0.5, recurrent_dropout=0.5,
+              kernel_regularizer = regularizer_l2(l=0.0001),
               #return_sequences = TRUE,
-              input_shape = list(NULL,
-                                 dim(train$scaled_data[,-1])[[-1]])) %>%
+              input_shape = c(NULL, k, p)) %>%
     #layer_lstm(units = 64, activation="relu", 
      #          dropout=0.1, recurrent_dropout=0.5) %>%
     layer_dense(units = 1)
@@ -896,7 +925,7 @@ rmse <- function(y_pred, y_true) {
   mean_sq_diff <- backend$mean(sq_diff, axis = -1)
   rmse_value <- backend$sqrt(mean_sq_diff)
   rmse_value <- backend$cast(rmse_value, dtype = "float32")
-  rmse_value
+  return(rmse_value)
 }
 ```
 
@@ -921,7 +950,7 @@ callbacks <- list(
 history_2 <- model_2 %>% fit_generator(
   generator = train_gen,
   steps_per_epoch = train_steps,
-  epochs = 20,
+  epochs = 10,
   validation_data = val_gen,
   validation_steps = val_steps,
   callbacks = callbacks
