@@ -797,8 +797,7 @@ val_gen <- function() {
 ```{r training and testing data read, include=FALSE}
 
   # Leer los archivos Excel de Lotes y crear un data frame  feautures
-  features <- unique(rbind(read_lot(), 
-                    read_lotX()))
+  features <- unique(rbind(read_lot(), read_lotX()))
   features <- features[order(features[[1]]), ]
   head(features)
   
