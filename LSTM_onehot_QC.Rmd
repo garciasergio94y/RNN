@@ -830,8 +830,8 @@ predseries <- 1 # Posición en el dataset de la variable a predecir (QC_RESULT)
  
 train_k <- lapply(index_values, function(idx) {
   create_lstm_data.2(
-    data = as.matrix(train_indx[train_indx[,"index"] == idx, 1]),
-                                #-c(1, length(val_indx))]),
+    data = as.matrix(train_indx[train_indx[,"index"] == idx,
+                                -c(2:14,length(val_indx))]),
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
@@ -860,8 +860,8 @@ val_indx$code <- NULL
 
 val_k <- lapply(index_values, function(idx) {
   create_lstm_data.2(
-    data = as.matrix(val_indx[val_indx[,"index"] == idx, 1]),
-                              #-c(1, length(val_indx))]),
+    data = as.matrix(val_indx[val_indx[,"index"] == idx,
+                              -c(2:14, length(val_indx))]),
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
@@ -910,8 +910,8 @@ model_2 <- keras_model_sequential() %>%
    layer_masking(mask_value = -99999, input_shape = c(NULL, k, p)) %>%
    layer_lstm(units = 64, 
               dropout=0.8, 
-              recurrent_dropout=0.5,
-              kernel_regularizer = regularizer_l2(l=0.0001),
+              recurrent_dropout=0.1,
+              kernel_regularizer = regularizer_l2(l=0.01),
               return_sequences = TRUE,
               input_shape = c(NULL, k, p)) %>%
     layer_lstm(units = 64, 
@@ -954,7 +954,7 @@ callbacks <- list(
 history_2 <- model_2 %>% fit_generator(
   generator = train_gen,
   steps_per_epoch = train_steps,
-  epochs = 10,
+  epochs = 15,
   validation_data = val_gen,
   validation_steps = val_steps,
   callbacks = callbacks
