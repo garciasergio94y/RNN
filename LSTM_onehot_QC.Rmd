@@ -17,7 +17,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # Definir los nombres de los paquetes que se desean instalar
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
-              "tictoc", "wavelets", "reticulate", "abind",
+              "tictoc", "wavelets", "gridExtra", "reticulate", "abind",
               "tensorflow", "tfdatasets", "keras")
 
 # Función para instalar paquetes si no están ya instalados
@@ -44,6 +44,7 @@ require(lubridate)
 require(ggplot2)
 require(caret)
 require(wavelets)
+library(gridExtra)
 require(tictoc)
 require(reticulate)
 require(abind)
@@ -64,6 +65,7 @@ lotdir_old <- file.path(workingdir, "Datos/daily_s/Lot/old")
 qcdir <- file.path(workingdir, "Datos/daily_s/qc")
 qcdir_old <- file.path(workingdir, "Datos/daily_s/qc/old")
 resultsdir <- file.path(workingdir, "Resultados")
+figuresdir <- file.path(workingdir, "Resultados/Figuras")
 
 # Definir el intervalo de tiempo en segundos entre las lecturas
 interval <- 60
@@ -128,6 +130,12 @@ read_qc <- function() {
     list_df[[i]] <- data
   }  
     
+  for (i in seq_along(list_df)) {
+  if (!is.numeric(list_df[[i]][[3]])) {
+    list_df[[i]][[3]] <- as.numeric(as.character(list_df[[i]][[3]]))
+  }
+}
+
   # Unir todos los dataframes en uno solo:
   df <- bind_rows(list_df)
   
@@ -161,31 +169,32 @@ read_qc <- function() {
 Función para detectar el nivel de cada control de calidad basándose en el string que contiene su nombre (detecta 1, 2 ó 3 al final del string o bien las palabras "alto", "medio" o "bajo"). Una vez detectado el nivel genera un valor numérico 1, 2, ó 3.
 
 ```{r QC level detection}
+ 
 qc_level <- function(df) {
   # Creamos una nueva columna NIVEL:
   df$NIVEL <- NA
   
   # Extraemos el último caracter del string:
-  last_char <- substr(df$Control, nchar(df$Control),
-                      nchar(df$Control))
+  last_char <- substr(df$Control, nchar(df$Control), nchar(df$Control))
   
-  # Condición para establecer si los términos "alto", "bajo" o "medio" se encuentran en el string del nombre del control:
-  df$NIVEL <- ifelse(grepl("\\b(bajo|medio|alto)\\b", 
-                           df$Control, ignore.case = TRUE),
-                     ifelse(grepl("\\balto\\b"
-                                  , df$Control, ignore.case = TRUE), 3,
-                            ifelse(grepl("\\bbajo\\b", df$Control,
-                                         ignore.case = TRUE), 1,
-                                   ifelse(grepl("\\bmedio\\b",
-                                                df$Control,
-                                                ignore.case = TRUE),
-                                          2, NA))),
-                     ifelse(last_char %in% c("1", "2", "3"),
-                            as.character(last_char), NA))
+  # Condiciones para establecer el nivel basado en el nombre del control:
+  df$NIVEL <- ifelse(df$CODIGO_PRUEBA == "CLC00544",
+                     # Corregir el caso específico donde de CLC00544, donde CARDIAC BIORAD 3 corresponde al nivel 3, hs-TnI alto al 2 y hs-TnI medio al 1:
+                     ifelse(df$Control == "CARDIAC BIORAD 3", 3,
+                            ifelse(df$Control == "hs-TnI alto", 2,
+                                   ifelse(df$Control == "hs-TnI medio", 1, NA))),
+                     ifelse(grepl("\\b(bajo|medio|alto)\\b", df$Control, ignore.case = TRUE),
+                            ifelse(grepl("\\bmedio\\b", df$Control, ignore.case = TRUE), 1,
+                                   ifelse(grepl("\\balto\\b", df$Control, ignore.case = TRUE), 2, 3)),
+                            ifelse(last_char %in% c("1", "2", "3"), as.integer(last_char), NA))
+  )
+  
   # Se reordena el dataframe: 
   df %<>% relocate("NIVEL", .after = 6)
+  
   return(df)
 }
+
 ```
 
 
@@ -472,8 +481,9 @@ code_cat_var <- function(data) {
     data %<>% select(., -CODIGO_PRUEBA)
     }
   
-  
-  # Detección de strings:
+  # Reconversión de NIVEL a string:
+  data$NIVEL <- as.character(data$NIVEL)
+    # Detección de strings:
   cat_vars <- which(sapply(data, is.character))
   # Conversión a factores:
   data_cat <- lapply(data[,cat_vars], as.factor)
@@ -565,9 +575,9 @@ create_lstm_data.2 <-
 
 ```
 
-## Funciones ```train_gen``` y ```val_gen```.
+## Funciones ```train_gen```, ```val_gen``` y ```test_gen```.
 
-Funciones generadoras globales de series para train y validation, Estas funciones generan de manera indefinida series con los datos de entrenamiento y validación, usando de manera consecutiva las funciones generadoras individuales almacenadas junto a los subconjuntos de datos con las posibles combinaciones de variables categóricas. Si se llega a la generación última se repite el proceso desde la primera. Incluyen un TryCatch para evitar la parada del modelo si se encuentran secuencias de datos vacías.  
+Funciones generadoras globales de series para train, validation y testing, Estas funciones generan de manera indefinida series con los datos de entrenamiento, validación y comprobación, usando de manera consecutiva las funciones generadoras individuales almacenadas junto a los subconjuntos de datos con las posibles combinaciones de variables categóricas. Si se llega a la generación última se repite el proceso desde la primera. Incluyen un TryCatch para evitar la parada del modelo si se encuentran secuencias de datos vacías.  
 
 ### Secuenciales:
 
@@ -603,6 +613,33 @@ train_gen <- function() {
 index_val <- 1
 
 val_gen <- function() {
+  if (index_val > length(val_k)) {
+    index_val <<- 1
+  }
+  
+  sequence <- NULL
+  counter <- 0
+  
+  while (is.null(sequence) && counter < length(val_k)) {
+    sequence <- tryCatch(
+      val_k[[index_val]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la                               función generadora
+      }
+    )
+    
+    index_val <<- index_val + 1
+    counter <<- counter + 1
+  }
+  
+  return(sequence)
+}
+
+index_train <- 1
+
+train_gen <- function() {
   if (index_val > length(val_k)) {
     index_val <<- 1
   }
@@ -673,6 +710,26 @@ val_gen <- function() {
   NULL
 }
 
+test_gen <- function() {
+  indices <- sample(length(val_k))
+  
+  for (i in indices) {
+    sequence <- tryCatch(
+      test_k[[i]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(sequence)) {
+      return(sequence)
+    }
+  }
+  
+  NULL
+}
+
 ```
 
 # Carga y preprocesado de los datos.
@@ -684,14 +741,15 @@ val_gen <- function() {
   events <- read_event()
 
   
-  #Leer los archivos de resultados de QC y crear el data frame qc_results:
+  #Leer los archivos de resultados de QC y crear el data frame qc_results. Se eliminan las entradas con valores NA en TIEMPO_QC:
   qc_results <- read_qc()
   
   qc_results %<>% qc_level()
   qc_results <- qc_results %>% merge_date()
-  
   qc_results <- figure_ext(qc_results, 3)
-
+  qc_results <- qc_results[!is.na(qc_results$TIEMPO_QC),]
+  
+  length(which(is.na(qc_results$TIEMPO_QC)))
 
   
 ```
@@ -699,6 +757,7 @@ val_gen <- function() {
 ```{r merge dataframe}
 # Unir los dos dataframes qc_results y events en uno solo.
 qc_event <- merge_qc_events(qc_results, events) 
+
 head(qc_event)
 
 ```
@@ -727,20 +786,30 @@ write.csv(qc_data_sel_wl, row.names = F,
 
 ```{r autocorrelation, partial autocorrelation an ARMA}
 
-library(gridExtra)
+# Crear un archivo PDF para guardar los gráficos
+pdf(file.path(figuresdir, "graficos.pdf"))
 
-qc_data_sel_wl %>%
+# Configurar la distribución de los gráficos en la página
+par(mfrow = c(2, 3))
+  
+# Generar los gráficos
+  qc_data_sel_wl %>%
   group_by(CODIGO_PRUEBA, NIVEL) %>%
   nest() %>%
   mutate(acf_plots = map(data, ~ {
-    acf(.x$QC_RESULT, type = "correlation")
-    title(main = paste("NIVEL:", unique(NIVEL), 
-                       "CLC:", unique(CODIGO_PRUEBA)),
-          outer = T)
+    acf(.x$QC_RESULT, type = "correlation", main="")
+    title(main = paste0("CLC:", unique(CODIGO_PRUEBA)),
+          sub = paste0("NIVEL:", unique(NIVEL)),
+          outer = F)
   })) %>%
   pull(acf_plots) %>%
-  grid.arrange(grobs = ., ncol = 10) 
+  grid.arrange(grobs = ., ncol = 10)
 
+# Restaurar los parámetros gráficos a su valor original
+par(mfrow = c(1, 1))
+
+# Cerrar el archivo PDF
+dev.off()
 ```
 
 
@@ -761,7 +830,7 @@ time_point_75
 ```{r training dataset subsetting and normalization, include=FALSE}
 # Muestra de entrenamiento:
 train_n <- qc_data_sel_wl %>%
-  subset(.[[1]] <= time_point_75) %>%
+  subset(.[[1]] <= time_point_50) %>%
   # Normalización del dataset y eliminación de coeficientes
   # wavelet con valor NA:
   normalize_train()
@@ -771,32 +840,38 @@ train_n <- qc_data_sel_wl %>%
 # Muestra de validación:
 val_n <- qc_data_sel_wl %>%
   subset(
-    #.[[1]] > time_point_50 &
-    .[[1]] > time_point_75) %>%
+    .[[1]] > time_point_50 &
+    .[[1]] <= time_point_75) %>%
+  # Normalización del dataset y eliminación de coeficientes
+  # wavelet con valor NA:
+  norm_test_val(means = train$means, stds = train$stdev)
+```
+
+
+```{r test dataset subsetting and normalization}
+# Muestra de test:
+test_n <- qc_data_sel_wl %>%
+  subset(.[[1]] > time_point_75) %>%
   # Normalización del dataset y eliminación de coeficientes
   # wavelet con valor NA:
   norm_test_val(means = train$means, stds = train$stdev)
 ```
 
 ```{r training and validation dataset onehot coding}
-# Codificación onehot:
+# Codificación onehot 
 
-train_code <- code_cat_var(train_n$scaled_data)
+train_code <- code_cat_var(train_n$scaled_data) 
+
 
 val_code <- code_cat_var(val_n)
+val_code[[1]] %<>% arrange(., val_code[[1]]$TIEMPO_QC)
 
+test_code <- code_cat_var(test_n)
+test_code[[1]] %<>% arrange(., test_code[[1]]$TIEMPO_QC)
 ```
 
 
 
-```{r test dataset subsetting and normalization}
-# Muestra de test:
-test <- qc_data_sel_wl %>%
-  subset(.[[1]] > time_point_75) %>%
-  # Normalización del dataset y eliminación de coeficientes
-  # wavelet con valor NA:
-  norm_test_val(means = train$means, stds = train$stdev)
-```
 
 ```{r trainig set case grouping and k length time series creation}
 # Creación de series temporales de tamaño k con los datos de training:
@@ -804,7 +879,7 @@ test <- qc_data_sel_wl %>%
 # Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de training usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir (en este caso el analizador): 
 
 train_indx <- unique_lab_cases(train_code$data,
-                               categorical_vars = c(17:48))[,-1]
+                               categorical_vars = c(17:48))
 
 # Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
 code_values <- unique(train_indx[,"code"])
@@ -813,10 +888,12 @@ code_dictionary %<>%
   mutate(., index = as.numeric(factor(code_values, 
                                       levels = code_values)))
 
-# Sustituimos los códigos de train_indx por sus índices numéricos:
+# Sustituimos los códigos de train_indx por sus índices numéricos y aseguramos que train_index queda ordenado por fecha y hora ascendente anted de eliminar esta variable:
 train_indx$index <- code_dictionary$index[match(train_indx$code, code_dictionary$code)]
 index_values <- unique(train_indx[,"index"])
 train_indx$code <- NULL
+train_indx %<>% arrange(., train_indx$TIEMPO_QC)
+train_indx$TIEMPO_QC <- NULL
 
 # Hiperparámetros para generar las series temporales:
 lookback <- 10  # Longitud de la secuencia previa al target.
@@ -831,7 +908,7 @@ predseries <- 1 # Posición en el dataset de la variable a predecir (QC_RESULT)
 train_k <- lapply(index_values, function(idx) {
   create_lstm_data.2(
     data = as.matrix(train_indx[train_indx[,"index"] == idx,
-                                -c(2:14,length(val_indx))]),
+                                -c(2:15,length(val_indx))]),
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
@@ -850,18 +927,20 @@ train_steps <- round((nrow(train_code$data)-lookback) / batch_size)
 ```{r Validation set case grouping and k length time series creation}
 
 val_indx <- unique_lab_cases(val_code$data, 
-                             categorical_vars = c(17:48))[,-1]
+                             categorical_vars = c(17:48))
 
-# Usamos el diccionario de códigos creado anteriormente: 
+# Usamos el diccionario de códigos creado anteriormente, ordenamos por TIEMPO_QC antes de eliminar esta variable: 
 
 val_indx$index <- code_dictionary$index[match(val_indx$code, code_dictionary$code)]
 index_values <- unique(val_indx[,"index"])
 val_indx$code <- NULL
+val_indx %<>% arrange(., val_indx$TIEMPO_QC)
+val_indx$TIEMPO_QC <- NULL
 
 val_k <- lapply(index_values, function(idx) {
   create_lstm_data.2(
     data = as.matrix(val_indx[val_indx[,"index"] == idx,
-                              -c(2:14, length(val_indx))]),
+                              -c(2:15, length(val_indx))]),
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
@@ -875,26 +954,38 @@ val_k <- lapply(index_values, function(idx) {
 val_steps <- round((nrow(val_code$data)-lookback) / batch_size)
 ```
 
-```{r common sense baseline}
-# Función para calcular el MAE promedio para un modelo basado en predecir los targets del set de validación con las mismas muestras de validación, mediante la iteración de lotes de muestras. Esto sería equivalente a un modelo que predice el resultado futuro del QC con el actual y constituye el punto de partida para mejorar (common sense baseline).
+```{r Test set case grouping and k length time series creation}
 
-evaluate_naive_method <- function() {
-  batch_maes <- c()
-  for (step in 1:val_steps) {
-    c(samples, targets) %<-% val_gen()
-    preds <- samples[,dim(samples)[[2]],2]
-    mae <- mean(abs(preds - targets))
-    batch_maes <- c(batch_maes, mae)
-  }
-  print(mean(batch_maes))
-}
+test_indx <- unique_lab_cases(test_code$data, 
+                             categorical_vars = c(17:48))
 
-maes <- evaluate_naive_method()
-cbind(train_n$stdev[[3]], maes*train_n$stdev[[3]])
+# Usamos el diccionario de códigos creado anteriormente, ordenamos por TIEMPO_QC antes de eliminar esta variable: 
 
+test_indx$index <- code_dictionary$index[match(test_indx$code, code_dictionary$code)]
+index_values <- unique(test_indx[,"index"])
+test_indx$code <- NULL
+test_indx %<>% arrange(., test_indx$TIEMPO_QC)
+test_indx$TIEMPO_QC <- NULL
+
+test_k <- lapply(index_values, function(idx) {
+  create_lstm_data.2(
+    data = as.matrix(test_indx[test_indx[,"index"] == idx,
+                              -c(2:15, length(val_indx))]),
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = 
+      nrow(as.matrix(test_indx[test_indx[,"index"] == idx,]))-delay-1,
+    predseries = predseries)
+})
+
+# Cálculo del número de steps de validación:
+test_steps <- round((nrow(test_code$data)-lookback) / batch_size)
 ```
 
 
+## Definición del modelo.
 
 ```{r model definition, eval=FALSE}
 set.seed(123)
@@ -933,8 +1024,9 @@ rmse <- function(y_pred, y_true) {
 }
 ```
 
+## Compilación.
 
-```{r model compilation and callbacks, eval=FALSE}
+```{r model compilation and callbacks}
 model_2 %>% compile(
     optimizer = "adam",
     loss="mse", 
@@ -949,8 +1041,9 @@ callbacks <- list(
                                      save_best_only = TRUE)))
 ```
 
+## Entrenamiento.
 
-```{r model fit, eval=FALSE}
+```{r model fit}
 history_2 <- model_2 %>% fit_generator(
   generator = train_gen,
   steps_per_epoch = train_steps,
@@ -964,22 +1057,95 @@ history_2 <- model_2 %>% fit_generator(
 plot(history_2)
 ```
 
-```{r, eval=FALSE}
+## Evaluación
 
+```{r, eval=FALSE}
+set.seed(123)
 # Evaluación del modelo:
 path <- file.path(resultsdir, "lstm_2.keras/TRUE")
 model <- load_model_hdf5(path) 
-sprintf("Test MAE: %.2f", evaluate(model, test_code)["mae"]) 
+evaluation_result <- evaluate(model, test_gen, steps = test_steps)
+
+# Obtener el nombre de las métricas
+metric_names <- names(evaluation_result)
+
+# Crear un vector para almacenar los resultados
+evaluation_results <- numeric(length(metric_names))
+
+# Almacenar los resultados en el vector
+for (i in 1:length(metric_names)) {
+  evaluation_results[i] <- evaluation_result[[i]]
+}
+
+# Imprimir los resultados de evaluación
+for (i in 1:length(metric_names)) {
+  metric <- metric_names[i]
+  value <- evaluation_results[i]
+  cat(sprintf("%s: %f\n", metric, value))
+}
  
 ```
 
-```{r model evaluation, eval=FALSE}
-# Carga del mejor modelo y evaluación:
-model <- load_model_tf("lstm_1.keras")
-sprintf("Test MAE: %.2f", evaluate(model, test_ds)["accuracy"])
-
+```{r}
+test_select <- function(CLC, NIVEL, ANALIZADOR, FECHA) {
+  
+  create_lstm_data.2(
+    data = as.matrix(test_indx[test_indx[,"index"] == idx,
+                              -c(2:15, length(val_indx))]),
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = 
+      nrow(as.matrix(test_indx[test_indx[,"index"] == idx,]))-delay-1,
+    predseries = predseries)
+})
+  
+  x <- readline("Introduce el valor de x: ")
 ```
 
+
+```{r model prediction, }
+
+# Obtener las predicciones utilizando la función generadora de tests:
+
+predictions <- predict(model, x = test_gen[[1]], steps = test_steps)
+
+# Obtener las etiquetas verdaderas utilizando la función generadora
+labels <- generator_labels
+
+# Calcular la curva ROC y otras métricas
+roc_obj <- roc(labels, predictions[, 2])
+auc <- auc(roc_obj)
+sensitivity <- sensitivity(roc_obj, levels = "specificity")
+specificity <- specificity(roc_obj, levels = "sensitivity")
+
+# Imprimir los resultados
+cat("AUC: ", auc, "\n")
+cat("Sensibilidad: ", sensitivity, "\n")
+cat("Especificidad: ", specificity, "\n")
+```
+
+## Línea base de sentido común
+
+```{r common sense baseline}
+# Función para calcular el MAE promedio para un modelo basado en predecir los targets del set de validación con las mismas muestras de validación, mediante la iteración de lotes de muestras. Esto sería equivalente a un modelo que predice el resultado futuro del QC con el actual y constituye el punto de partida para mejorar (common sense baseline).
+
+evaluate_naive_method <- function() {
+  batch_maes <- c()
+  for (step in 1:val_steps) {
+    c(samples, targets) %<-% val_gen()
+    preds <- samples[,dim(samples)[[2]],2]
+    mae <- mean(abs(preds - targets))
+    batch_maes <- c(batch_maes, mae)
+  }
+  print(mean(batch_maes))
+}
+
+maes_naive <- evaluate_naive_method()
+cbind(train_n$stdev[[3]], maes_naive*train_n$stdev[[3]])
+
+```
 
 ```{r loop, eval=FALSE}
 # Iniciar el loop que se ejecutará periódicamente para leer los archivos csv en la fase de puesta en producción
