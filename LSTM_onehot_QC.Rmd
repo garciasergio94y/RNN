@@ -734,6 +734,8 @@ test_gen <- function() {
 
 # Carga y preprocesado de los datos.
 
+## Lectura de archivos
+
 ```{r training and testing data read, include=FALSE}
 # Lectura de los datos que se usarán para training y test
 
@@ -761,6 +763,7 @@ qc_event <- merge_qc_events(qc_results, events)
 head(qc_event)
 
 ```
+## Selección de características y transformación wavelet.
 
 ```{r features selection and wavelet transformation}
 # Selección de características de interés y recodificación de variables:
@@ -770,11 +773,14 @@ qc_data_sel <- subset(qc_results,
                                  CODIGO_PRUEBA, NIVEL))
 ```
 
+
 ```{r}
 # Aplicación de transformación wavelet:
 qc_data_sel_wl <- qc_data_sel %>% wavelet_tr()
 
 ```
+
+## Guardado de archivo csv.
 
 ```{r save csv}
 # Guardado de datos en archivo csv.
@@ -783,6 +789,8 @@ write.csv(qc_data_sel_wl, row.names = F,
           file = file.path(resultsdir, "qc_data_sel_wl"))
 
 ```
+
+## Modelo ARMA aplicado a los datos temporales.
 
 ```{r autocorrelation, partial autocorrelation an ARMA}
 
@@ -812,6 +820,7 @@ par(mfrow = c(1, 1))
 dev.off()
 ```
 
+## División de los sets de entrenamiento, validación y prueba. Normalización.
 
 ```{r training, validation and test dataset}
 # Se divide el dataset en 50% de datos para entrenamiento, 25% para test y 25% para validación. Para evitar fraccionar las unidades temporales diarias usamos percentiles de la secuencia temporal en días: 
@@ -836,6 +845,7 @@ train_n <- qc_data_sel_wl %>%
   normalize_train()
 ```
 
+
 ```{r validation dataset subsetting and normalization}
 # Muestra de validación:
 val_n <- qc_data_sel_wl %>%
@@ -857,21 +867,20 @@ test_n <- qc_data_sel_wl %>%
   norm_test_val(means = train$means, stds = train$stdev)
 ```
 
-```{r training and validation dataset onehot coding}
+## Codificación one-hot.
+
+```{r training validation and test dataset onehot coding}
 # Codificación onehot 
 
 train_code <- code_cat_var(train_n$scaled_data) 
 
-
 val_code <- code_cat_var(val_n)
-val_code[[1]] %<>% arrange(., val_code[[1]]$TIEMPO_QC)
 
 test_code <- code_cat_var(test_n)
-test_code[[1]] %<>% arrange(., test_code[[1]]$TIEMPO_QC)
+
 ```
 
-
-
+## Creación de las funciones generadoras para las series temporales etiquetadas de los datasets de training, validación y prueba.
 
 ```{r trainig set case grouping and k length time series creation}
 # Creación de series temporales de tamaño k con los datos de training:
@@ -954,6 +963,7 @@ val_k <- lapply(index_values, function(idx) {
 val_steps <- round((nrow(val_code$data)-lookback) / batch_size)
 ```
 
+
 ```{r Test set case grouping and k length time series creation}
 
 test_indx <- unique_lab_cases(test_code$data, 
@@ -984,8 +994,7 @@ test_k <- lapply(index_values, function(idx) {
 test_steps <- round((nrow(test_code$data)-lookback) / batch_size)
 ```
 
-
-## Definición del modelo.
+## Definición del modelo LSTM.
 
 ```{r model definition, eval=FALSE}
 set.seed(123)
@@ -1012,6 +1021,8 @@ model_2 <- keras_model_sequential() %>%
 
 ```
 
+## Compilación.
+
 ```{r custom rmse metrics function}
 
 rmse <- function(y_pred, y_true) {
@@ -1024,7 +1035,6 @@ rmse <- function(y_pred, y_true) {
 }
 ```
 
-## Compilación.
 
 ```{r model compilation and callbacks}
 model_2 %>% compile(
@@ -1070,20 +1080,13 @@ evaluation_result <- evaluate(model, test_gen, steps = test_steps)
 metric_names <- names(evaluation_result)
 
 # Crear un vector para almacenar los resultados
-evaluation_results <- numeric(length(metric_names))
+evaluation_results <- length(metric_names)
 
 # Almacenar los resultados en el vector
 for (i in 1:length(metric_names)) {
   evaluation_results[i] <- evaluation_result[[i]]
 }
 
-# Imprimir los resultados de evaluación
-for (i in 1:length(metric_names)) {
-  metric <- metric_names[i]
-  value <- evaluation_results[i]
-  cat(sprintf("%s: %f\n", metric, value))
-}
- 
 ```
 
 ```{r}
@@ -1143,27 +1146,31 @@ evaluate_naive_method <- function() {
 }
 
 maes_naive <- evaluate_naive_method()
-cbind(train_n$stdev[[3]], maes_naive*train_n$stdev[[3]])
 
-```
+# Comparación con rendimiento obtenido:
 
-```{r loop, eval=FALSE}
-# Iniciar el loop que se ejecutará periódicamente para leer los archivos csv en la fase de puesta en producción
-while (TRUE) {
-  tic() # iniciar contador de tiempo
-  
-  # Leer los archivos Excel de Lotes y crear un data frame    feautures
-  features <- read_lot()
-    
-  
-```
+mae <- evaluation_results[2]
 
-```{r end loop, eval=FALSE}
+# Imprimir los resultados de evaluación
+sink(file.path(resultsdir, "model_2.txt"))
 
-  
-  # Esperar el intervalo de tiempo definido antes de la siguiente lectura
-  Sys.sleep(intervalo - toc())
+for (i in 1:length(metric_names)) {
+  metric <- metric_names[i]
+  value <- evaluation_results[i]
+  cat(sprintf("%s: %f\n", metric, value))
 }
 
+eval_model <- cbind(train_n$stdev[[2]], train_n$stdev[[1]],
+                    train_n$stdev[[3]], maes_naive*train_n$stdev[[3]],
+                    mae*train_n$stdev[[3]])
+colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR", "SD",
+                          "NAIVE_MAE*SD", "MAE*SD" )
+eval_model
+
+# Cerrar el archivo de salida
+sink()
+
 ```
+
+
 
