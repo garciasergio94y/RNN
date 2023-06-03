@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
               "tictoc", "wavelets", "gridExtra", "reticulate", "abind",
-              "tensorflow", "tfdatasets", "keras")
+              "tensorflow", "tfdatasets", "keras", "ModelMetrics")
 
 # Función para instalar paquetes si no están ya instalados
 install_packages <- function(package) {
@@ -51,6 +51,7 @@ require(abind)
 require(tensorflow)
 require(tfdatasets)
 require(keras)
+require(ModelMetrics)
 ```
 
 
@@ -584,7 +585,7 @@ Funciones generadoras globales de series para train, validation y testing, Estas
 ```{r custom generator}
 index_train <- 1
 
-train_gen <- function() {
+train_gen_seq <- function() {
   if (index_train > length(train_k)) {
     index_train <<- 1
   }
@@ -612,7 +613,7 @@ train_gen <- function() {
 
 index_val <- 1
 
-val_gen <- function() {
+val_gen_seq <- function() {
   if (index_val > length(val_k)) {
     index_val <<- 1
   }
@@ -637,19 +638,19 @@ val_gen <- function() {
   return(sequence)
 }
 
-index_train <- 1
+index_test <- 1
 
-train_gen <- function() {
-  if (index_val > length(val_k)) {
-    index_val <<- 1
+test_gen_seq <- function() {
+  if (index_test > length(test_k)) {
+    test_val <<- 1
   }
   
   sequence <- NULL
   counter <- 0
   
-  while (is.null(sequence) && counter < length(val_k)) {
+  while (is.null(sequence) && counter < length(test_k)) {
     sequence <- tryCatch(
-      val_k[[index_val]](),
+      test_k[[index_test]](),
       error = function(e) {
         warning("Empty sequence error occurred in the generator.
                 Trying the next one.")
@@ -657,7 +658,7 @@ train_gen <- function() {
       }
     )
     
-    index_val <<- index_val + 1
+    index_test <<- index_test + 1
     counter <<- counter + 1
   }
   
@@ -676,7 +677,8 @@ train_gen <- function() {
     sequence <- tryCatch(
       train_k[[i]](),
       error = function(e) {
-        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
         return(NULL)
       }
     )
@@ -697,7 +699,8 @@ val_gen <- function() {
     sequence <- tryCatch(
       val_k[[i]](),
       error = function(e) {
-        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
         return(NULL)
       }
     )
@@ -717,7 +720,8 @@ test_gen <- function() {
     sequence <- tryCatch(
       test_k[[i]](),
       error = function(e) {
-        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
         return(NULL)
       }
     )
@@ -1118,6 +1122,7 @@ evaluate_naive_method <- function() {
 # Comparación con rendimiento obtenido:
 
 mae <- evaluation_results[2]
+mse <- evaluation_results[3]
 
 # Imprimir los resultados de evaluación:
 
@@ -1194,7 +1199,7 @@ index_select <- function() {
   
   index <- code_dictionary$index[match(code,
                                        code_dictionary$code)]
-  
+  print(index)
   return(index)
   
 }
@@ -1220,19 +1225,17 @@ index_pred <- index_select()
 
 ```{r model prediction and metrics}
 
-# Obtener las predicciones utilizando la función generadora de tests:
+# Obtener las series y sus predicciones utilizando la función generadora de tests por categorías y obtener la predicción del modelo:
 x <- test_pred[[1]]()[[1]]
 y_pred <-  predict(model, x = x)
 y_true <- test_pred[[1]]()[[2]]
 
-# Obtener las etiquetas verdaderas utilizando la función generadora
-labels <- test_pred[[1]]()[[2]]
-
 metrics <- list(
-  MSE <- mse(actual=labels, predicted = predictions),
-  MAE <- mae(actual=labels, predicted = predictions),
-  Correlación <- cor(predictions[,1], labels)
+  MSE <- mse(actual = y_true, predicted = y_pred),
+  MAE <- mae(actual = y_true, predicted = y_pred),
+  Correlación <- cor(y_pred, y_true)
 )
+names(metrics) <- c("MSE", "MAE", "Coef. correlación")
 metrics
 
 # Crear el gráfico de dispersión entre y_pred e y_true
@@ -1245,6 +1248,115 @@ correlacion <- cor(y_true, y_pred)
 # Agregar el coeficiente de correlación al gráfico
 texto_cor <- paste("Correlación:", round(correlacion, 2))
 mtext(texto_cor, side = 3, line = -2.5)
+
+
+```
+
+```{r all metrics by categories}
+# Calcular las métricas de todas las categorías:
+
+global_metrics <- list()
+
+for(i in seq_along(test_k)){
+  
+  # Calcula x, y_true e y_pred a partir de la primera iteración de las funciones generadoras y el modelo:
+  x <- test_k[[i]]()[[1]]
+  y_true <- test_k[[i]]()[[2]]
+  y_pred <-  predict(model, x = x)
+
+  metrics <- list(
+  MSE <- mse(actual = y_true, predicted = y_pred),
+  MAE <- mae(actual = y_true, predicted = y_pred),
+  Correlación <- cor(y_pred, y_true)
+  )
+
+  names(metrics) <- c("MSE", "MAE", "Coef. correlación")
+  global_metrics[[i]] <- metrics
+
+}
+
+names(global_metrics) <- index_values
+
+# Crear un gráfico para cada elemento de las sublistas en global_metrics
+for (i in 1:3) {
+  plot(1:length(global_metrics), 
+       sapply(global_metrics, "[[", i),
+       pch = 16, 
+       xlab = "Index",
+       ylab = names(global_metrics[[1]][i])
+  )
+}
+
+
+```
+
+```{r index search}
+# Función para hacer la búsqueda inversa de analizador, prueba y nivel a partir de un index:
+
+reverse_index_select <- function(index) {
+  # Buscar el código correspondiente al índice
+  code <- code_dictionary$code[match(index, code_dictionary$index)]
+  
+  # Extraer los dígitos de code
+  digits <- strsplit(code, "")[[1]]
+  
+  # Encontrar las posiciones de los 1 en la secuencia de dígitos
+  pos_anal <- which(digits == "1")[1]
+  pos_clc <- which(digits == "1")[2]
+  pos_level <- which(digits == "1")[3]
+  
+  # Obtener los valores de anal, clc y level
+  anal <- names(test_indx)[16 + pos_anal]
+  clc <- names(test_indx)[16 + pos_clc]
+  level <- names(test_indx)[16 + pos_level]
+  
+  # Devolver los valores encontrados
+  result <- list(CÓDIGO_PRUEBA = substr(clc, 15, 22),
+                 NIVEL = level, 
+                 ANALIZADOR = anal)
+  return(result)
+}
+
+
+
+
+```
+
+```{r problematic cases search}
+
+# Búsqueda de casos con métricas por debajo de la media:
+
+limit_mse <- mse
+limit_mae <- mae
+limit_coef <- 0.7
+
+cases <- c()  # Lista para almacenar los índices
+
+for (i in seq_along(global_metrics)) {
+  
+  sublist <- global_metrics[[i]]  
+  
+  # Extracción de métricas:
+  mse_i <- sublist$MSE
+  mae_i <- sublist$MAE
+  coef_i <- sublist$`Coef. correlación` 
+  
+  if (mse_i >= limit_mse & mae_i >= limit_mae &
+      coef_i <= limit_coef) {
+    cases <- c(cases, i)  # Agregar el índice a la lista
+  }
+}
+
+# Imprimir los índices encontrados
+
+print(cases)
+
+# Transformar índices a información de casos:
+
+selection <-list()
+
+for(i in seq_along(cases))
+selection[[i]] <- reverse_index_select(cases[i])
 
 
 ```
