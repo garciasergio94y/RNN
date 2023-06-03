@@ -887,8 +887,9 @@ test_code <- code_cat_var(test_n)
 
 # Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de training usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir (en este caso el analizador): 
 
+categorical_vars <- c(17:48)
 train_indx <- unique_lab_cases(train_code$data,
-                               categorical_vars = c(17:48))
+                               categorical_vars = categorical_vars)
 
 # Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
 code_values <- unique(train_indx[,"code"])
@@ -936,7 +937,7 @@ train_steps <- round((nrow(train_code$data)-lookback) / batch_size)
 ```{r Validation set case grouping and k length time series creation}
 
 val_indx <- unique_lab_cases(val_code$data, 
-                             categorical_vars = c(17:48))
+                             categorical_vars = categorical_vars)
 
 # Usamos el diccionario de códigos creado anteriormente, ordenamos por TIEMPO_QC antes de eliminar esta variable: 
 
@@ -967,20 +968,19 @@ val_steps <- round((nrow(val_code$data)-lookback) / batch_size)
 ```{r Test set case grouping and k length time series creation}
 
 test_indx <- unique_lab_cases(test_code$data, 
-                             categorical_vars = c(17:48))
+                             categorical_vars = categorical_vars)
 
-# Usamos el diccionario de códigos creado anteriormente, ordenamos por TIEMPO_QC antes de eliminar esta variable: 
+# Usamos el diccionario de códigos creado anteriormente, ordenamos por TIEMPO_QC. Se deja esta variable aunque no se introduzca en la función generadora, para posteriormente realizar tests seleccionando fechas: 
 
 test_indx$index <- code_dictionary$index[match(test_indx$code, code_dictionary$code)]
 index_values <- unique(test_indx[,"index"])
 test_indx$code <- NULL
 test_indx %<>% arrange(., test_indx$TIEMPO_QC)
-test_indx$TIEMPO_QC <- NULL
 
 test_k <- lapply(index_values, function(idx) {
   create_lstm_data.2(
     data = as.matrix(test_indx[test_indx[,"index"] == idx,
-                              -c(2:15, length(val_indx))]),
+                              -c(1, 3:16, length(test_indx))]),
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
@@ -1089,70 +1089,41 @@ for (i in 1:length(metric_names)) {
 
 ```
 
-```{r}
-test_select <- function(CLC, NIVEL, ANALIZADOR, FECHA) {
-  
-  create_lstm_data.2(
-    data = as.matrix(test_indx[test_indx[,"index"] == idx,
-                              -c(2:15, length(val_indx))]),
-    lookback = lookback,
-    delay = delay,
-    batch_size = batch_size,
-    min_index = min_index,
-    max_index = 
-      nrow(as.matrix(test_indx[test_indx[,"index"] == idx,]))-delay-1,
-    predseries = predseries)
-})
-  
-  x <- readline("Introduce el valor de x: ")
-```
-
-
-```{r model prediction, }
-
-# Obtener las predicciones utilizando la función generadora de tests:
-
-predictions <- predict(model, x = test_gen[[1]], steps = test_steps)
-
-# Obtener las etiquetas verdaderas utilizando la función generadora
-labels <- generator_labels
-
-# Calcular la curva ROC y otras métricas
-roc_obj <- roc(labels, predictions[, 2])
-auc <- auc(roc_obj)
-sensitivity <- sensitivity(roc_obj, levels = "specificity")
-specificity <- specificity(roc_obj, levels = "sensitivity")
-
-# Imprimir los resultados
-cat("AUC: ", auc, "\n")
-cat("Sensibilidad: ", sensitivity, "\n")
-cat("Especificidad: ", specificity, "\n")
-```
-
-## Línea base de sentido común
+### Línea base de sentido común
 
 ```{r common sense baseline}
 # Función para calcular el MAE promedio para un modelo basado en predecir los targets del set de validación con las mismas muestras de validación, mediante la iteración de lotes de muestras. Esto sería equivalente a un modelo que predice el resultado futuro del QC con el actual y constituye el punto de partida para mejorar (common sense baseline).
 
 evaluate_naive_method <- function() {
-  batch_maes <- c()
+  batch_mae <- c()
+  batch_mse <- c()
   for (step in 1:val_steps) {
     c(samples, targets) %<-% val_gen()
     preds <- samples[,dim(samples)[[2]],2]
     mae <- mean(abs(preds - targets))
-    batch_maes <- c(batch_maes, mae)
+    mse <- mean((preds - targets)^2)
+    batch_mae <- c(batch_mae, mae)
+    batch_mse <- c(batch_mse, mse)
   }
-  print(mean(batch_maes))
+  naive_mse <- mean(batch_mse)
+  naive_mae <- mean(batch_mae) 
+  cat("naive_mae", mae, "\n", 
+      "naive_mse", mse, "\n")
+  naive <- list(naive_mae, naive_mse)
+  names(naive) <- c("mae", "mse")
+  return(naive)
+  
 }
-
-maes_naive <- evaluate_naive_method()
 
 # Comparación con rendimiento obtenido:
 
 mae <- evaluation_results[2]
 
-# Imprimir los resultados de evaluación
+# Imprimir los resultados de evaluación:
+
 sink(file.path(resultsdir, "model_2.txt"))
+
+naive <- evaluate_naive_method()
 
 for (i in 1:length(metric_names)) {
   metric <- metric_names[i]
@@ -1161,10 +1132,12 @@ for (i in 1:length(metric_names)) {
 }
 
 eval_model <- cbind(train_n$stdev[[2]], train_n$stdev[[1]],
-                    train_n$stdev[[3]], maes_naive*train_n$stdev[[3]],
+                    train_n$stdev[[3]], 
+                    naive$mae*train_n$stdev[[3]],
                     mae*train_n$stdev[[3]])
-colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR", "SD",
-                          "NAIVE_MAE*SD", "MAE*SD" )
+
+colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR",
+                          "SD","NAIVE_MAE*SD","MAE*SD")
 eval_model
 
 # Cerrar el archivo de salida
@@ -1172,5 +1145,107 @@ sink()
 
 ```
 
+### Evaluación por categorías.
 
+```{r model evaluation per category}
+# Función para seleccionar los índices en test_indx que corresponden a una combinación determinada de CODIGO_PRUEBA, NIVEL Y ANALIZADOR: 
+
+index_select <- function() {
+  
+  # Opciones para elegir CLC, NIVEL y ANALIZADOR:
+  clc_opt <- test_code$levels$CODIGO_PRUEBA
+  level_opt <- test_code$levels$NIVEL
+  anal_opt <- test_code$levels$ANALIZADOR
+  
+  # Introducción de la fecha por el usuario:
+  #date <- readline(
+   # "fecha del día anterior a la predicción (aaaa-mm-dd): ")
+  #if(!date %in% as.Date(test_code$data$TIEMPO_QC))
+   #  print("fecha no incluida en dataset")
+  
+  # Introducción de prueba, nivel y analizador:
+  clc <- clc_opt[menu(clc_opt, 
+                      title = "Código CLC de prueba: ",
+                      graphics = T)]
+  level <- level_opt[menu(level_opt, 
+                          title = "Nivel de QC: ",
+                          graphics = T)]
+  anal <- anal_opt[menu(anal_opt, 
+                        title = "Analizador: ",
+                        graphics = T)]
+    
+  cat("Indice correspondiente a la prueba: ", clc, "\n", 
+  "nivel: ", level, "\n",
+  "analizador: ", anal, "\n")
+  
+  # Conversión de las variables introducidas en índice:
+  
+  col_clc <- which(grepl(clc, names(test_indx)))-16
+  col_level <- which(grepl(paste0("NIVEL_", level), names(test_indx)))-16
+  col_anal <- which(grepl(anal, names(test_indx)))-16
+  pos <- list(col_clc, col_level, col_anal)
+  
+  code <- rep(0, length(categorical_vars+2))
+  
+  for (i in seq_along(pos)) {
+    code[pos[[i]]] <- 1 
+  }
+  code <- paste0(as.character(code), collapse = "")
+  
+  index <- code_dictionary$index[match(code,
+                                       code_dictionary$code)]
+  
+  return(index)
+  
+}
+
+index_pred <- index_select()
+
+  test_pred <- lapply(index_pred, function(idx) {
+    create_lstm_data.2(
+      data = as.matrix(test_indx[test_indx[,"index"] == idx,
+                                 -c(1, 3:16, length(test_indx))]),
+      lookback = lookback,
+      delay = delay,
+      batch_size = batch_size,
+      min_index = min_index,
+      max_index = 
+      nrow(as.matrix(test_indx[test_indx[,"index"] == idx,]))-delay-1,
+      predseries = predseries)
+  }
+  )
+
+```
+
+
+```{r model prediction and metrics}
+
+# Obtener las predicciones utilizando la función generadora de tests:
+x <- test_pred[[1]]()[[1]]
+y_pred <-  predict(model, x = x)
+y_true <- test_pred[[1]]()[[2]]
+
+# Obtener las etiquetas verdaderas utilizando la función generadora
+labels <- test_pred[[1]]()[[2]]
+
+metrics <- list(
+  MSE <- mse(actual=labels, predicted = predictions),
+  MAE <- mae(actual=labels, predicted = predictions),
+  Correlación <- cor(predictions[,1], labels)
+)
+metrics
+
+# Crear el gráfico de dispersión entre y_pred e y_true
+plot(y_true, y_pred, pch = 16, col = "blue", xlab = "y_true", ylab = "y_pred", 
+     main = "Gráfico de dispersión: y_true vs. y_pred")
+
+# Calcular el coeficiente de correlación
+correlacion <- cor(y_true, y_pred)
+
+# Agregar el coeficiente de correlación al gráfico
+texto_cor <- paste("Correlación:", round(correlacion, 2))
+mtext(texto_cor, side = 3, line = -2.5)
+
+
+```
 
