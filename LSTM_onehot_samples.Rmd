@@ -20,7 +20,7 @@ knitr::opts_chunk$set(echo = TRUE)
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
               "tictoc", "wavelets", "reticulate", "abind",
-              "tensorflow", "tfdatasets", "keras")
+              "tensorflow", "tfdatasets", "keras", "ModelMetrics")
 
 # Función para instalar paquetes si no están ya instalados
 install_packages <- function(package) {
@@ -52,6 +52,7 @@ require(abind)
 require(tensorflow)
 require(tfdatasets)
 require(keras)
+require(ModelMetrics)
 ```
 
 ## Definición de rutas y directorios
@@ -262,12 +263,12 @@ read_qc <- function() {
     end_pos <- regexpr("\\)", files_list[i], start_pos)
     clc <- substring(files_list[i], start_pos, end_pos - 1)
     
-    # Añadir como columnas "ANALIZADOR" y "CODIGO_PRUEBA" las cadenas     extraídas:
+    # Añadir como columnas "ANALIZADOR" y "CODIGO_PRUEBA" las           cadenas extraídas:
     data %<>% mutate("ANALIZADOR"= substr(dev, 13, 24),
                      "CODIGO_PRUEBA"= paste("CLC",clc, sep = "")) %>%
               relocate("ANALIZADOR", "CODIGO_PRUEBA", .after = 5)
     
-    # En caso de que el archivo de datos sea del histórico, la    identificación del control no se encuentra como columna, sino     en la cabecera, ya que los archivos han sido generados para cada  nivel de control individualmente. 
+    # En caso de que el archivo de datos sea del histórico, la    identificación del control no se encuentra como columna, sino en la cabecera, ya que los archivos han sido generados para cada  nivel de control individualmente. 
     # Identificación de este tipo de archivo, extracción de la identificación y creación de la columna "Control": 
     
     if(!("Control" %in% colnames(data))) {
@@ -282,21 +283,33 @@ read_qc <- function() {
     list_df[[i]] <- data
   }  
     
+  for (i in seq_along(list_df)) {
+  if (!is.numeric(list_df[[i]][[3]])) {
+    list_df[[i]][[3]] <- as.numeric(as.character(list_df[[i]][[3]]))
+  }
+}
+
   # Unir todos los dataframes en uno solo:
   df <- bind_rows(list_df)
   
   # Cambia el nombre a la columna Lote de reactivos:
   colnames(df)[10] <- "LOTE_REACTIVO"
   
-  # Fusiona las columnas de los valores de concentraciones         encontrados en distintas unidades en una sola columna:
-   df <- unite(df, "Resultado", c(3, 13:21),  sep = "", na.rm = T)
+  # Fusiona las columnas de los valores de concentraciones         encontrados en distintas unidades en una sola columna y cambia el tipo de valor a numérico:
+   df <- unite(df, "Resultado", c(3, 13:21),
+                          sep = "", na.rm = T)
+   df[[3]] %<>% as.numeric()
    
   # Reordena el dataframe:
    df %<>% relocate("Sup/Inf Media", .after = 4)
-  
-  # Cambia el nombre a la columna Lote de reactivos:
-  colnames(df)[3] <- "QC_RESULT"
    
+  # Cambia el nombre a la columna Lote de reactivos:
+   colnames(df)[3] <- "QC_RESULT"
+  
+  # Elimina filas con valores NA en LOTE_REACTIVO:
+  
+   df <- df[complete.cases(df$LOTE_REACTIVO), ]
+  
    # Mueve el archivo leído a la carpeta old:
   # file.move(files_list, qc_old, overwrite = TRUE)
   
@@ -689,7 +702,7 @@ Funciones generadoras globales de series para train y validation, Estas funcione
 ```{r custom generator}
 index_train <- 1
 
-train_gen <- function() {
+train_gen_seq <- function() {
   if (index_train > length(train_k)) {
     index_train <<- 1
   }
@@ -717,7 +730,7 @@ train_gen <- function() {
 
 index_val <- 1
 
-val_gen <- function() {
+val_gen_seq <- function() {
   if (index_val > length(val_k)) {
     index_val <<- 1
   }
@@ -742,6 +755,33 @@ val_gen <- function() {
   return(sequence)
 }
 
+index_test <- 1
+
+test_gen_seq <- function() {
+  if (index_test > length(test_k)) {
+    test_val <<- 1
+  }
+  
+  sequence <- NULL
+  counter <- 0
+  
+  while (is.null(sequence) && counter < length(test_k)) {
+    sequence <- tryCatch(
+      test_k[[index_test]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la                               función generadora
+      }
+    )
+    
+    index_test <<- index_test + 1
+    counter <<- counter + 1
+  }
+  
+  return(sequence)
+}
+
 ```
 
 ### Aleatorizadas:
@@ -754,7 +794,8 @@ train_gen <- function() {
     sequence <- tryCatch(
       train_k[[i]](),
       error = function(e) {
-        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
         return(NULL)
       }
     )
@@ -775,7 +816,29 @@ val_gen <- function() {
     sequence <- tryCatch(
       val_k[[i]](),
       error = function(e) {
-        warning("Empty sequence error occurred in the generator. Trying the next one.")
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(sequence)) {
+      return(sequence)
+    }
+  }
+  
+  NULL
+}
+
+test_gen <- function() {
+  indices <- sample(length(val_k))
+  
+  for (i in indices) {
+    sequence <- tryCatch(
+      test_k[[i]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
         return(NULL)
       }
     )
@@ -799,18 +862,36 @@ val_gen <- function() {
   # Leer los archivos Excel de Lotes y crear un data frame  feautures
   features <- unique(rbind(read_lot(), read_lotX()))
   features <- features[order(features[[1]]), ]
+  length(which(is.na(features$TIEMPO_MUESTRA)))
+  features <- features[!is.na(features$TIEMPO_MUESTRA),]
+  
   head(features)
+  summary(features)
+  
+  
   
   #Leer los archivos de eventos de QC y crear el data frame events:
   events <- unique(read_event())
-  head(events)
+  length(which(is.na(events$TIEMPO_EVENTO)))
   
-  #Leer los archivos de resultados de QC y crear el data frame qc_results:
+  head(events)
+  summary(events)
+  
+  #Leer los archivos de resultados de QC y crear el data frame qc_results, fusión de fecha y hora en una sola columna y separación de datos de media y desviación estándar en columnas individuales y como valores numéricos:
   qc_results <- read_qc()
 
   qc_results <- qc_results %>% merge_date()
 
+  length(which(is.na(qc_result)))
+  
+  qc_results <- qc_results[!is.na(qc_results$TIEMPO_QC),]
+  
   qc_results <- figure_ext(qc_results, 3)
+  
+ 
+  
+  head(qc_results)
+  summary(qc_results)
 
 
   
