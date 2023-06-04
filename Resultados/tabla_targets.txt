@@ -1,0 +1,60 @@
+
+\begin{tabular}{l|r|r}
+\hline
+  & TEST & CONTROLADO/NO CONTROLADO\\
+\hline
+Ac anti peroxidasa tiroidea \#TPO & 5726 & 251\\
+\hline
+Ac anti tiroglobulina & 492 & 0\\
+\hline
+Ácido fólico & 8984 & 707\\
+\hline
+Alfa-Fetoproteína & 4391 & 43\\
+\hline
+Antígeno carcinoembrionario \#CEA & 6962 & 255\\
+\hline
+CA 125 & 5036 & 194\\
+\hline
+CA 15.3 & 4936 & 241\\
+\hline
+CA 19.9 & 5307 & 76\\
+\hline
+Coriogonadotropina (beta total) & 700 & 35\\
+\hline
+Cortisol & 670 & 39\\
+\hline
+Creatina quinasa MB (masa) & 1606 & 133\\
+\hline
+Estradiol & 3514 & 35\\
+\hline
+Folitropina \#FSH & 4696 & 283\\
+\hline
+Lutropina \#LH & 4837 & 171\\
+\hline
+Paratirina (intacta) \#PTHI & 6166 & 216\\
+\hline
+Procalcitonina & 19534 & 379\\
+\hline
+Progesterona & 4030 & 235\\
+\hline
+Prolactina & 5135 & 215\\
+\hline
+PSA & 6168 & 213\\
+\hline
+PSA (libre) & 3469 & 191\\
+\hline
+Testosterona & 4370 & 12\\
+\hline
+Tirotropina \#TSH & 30558 & 3009\\
+\hline
+Tiroxina (libre) \#T4L & 5010 & 459\\
+\hline
+Triyodotironina (libre) \#T3L & 4172 & 76\\
+\hline
+Troponina I (alta sensibilidad) & 15023 & 1684\\
+\hline
+Vitamina B12 & 9438 & 1168\\
+\hline
+Vitamina D (25 OH) & 6961 & 932\\
+\hline
+\end{tabular}
