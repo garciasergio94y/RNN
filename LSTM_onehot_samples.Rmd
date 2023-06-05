@@ -1754,18 +1754,26 @@ history_1 <- model_1 %>% fit_generator(
 plot(history_1)
 ```
 
-## Evaluación
+# Evaluación
 
 ```{r, eval=FALSE}
 set.seed(123)
 
 # Evaluación del modelo:
 path <- file.path(resultsdir, "lstm_1.keras/TRUE")
+#path <- file.path(resultsdir, "GC_lstm_1.keras/TRUE")
 
 model <- load_model_hdf5(path, 
                          custom_objects = list('f1_score' =
                                                  f1_score),
-                         compile = T) 
+                         compile = F) 
+model %<>% compile(
+  optimizer = "adam",
+  loss = "binary_crossentropy",
+  metrics = list("binary_accuracy",
+                 f1_score)
+  )
+
 evaluation_result <- evaluate(model, test_gen, steps = test_steps)
 
 # Obtener el nombre de las métricas
@@ -1781,7 +1789,7 @@ for (i in 1:length(metric_names)) {
 
 ```
 
-### Línea base de sentido común
+## Línea base de sentido común
 
 ```{r common sense baseline}
 
@@ -1805,20 +1813,19 @@ evaluate_naive_method <- function(data_df, ctrl_colname) {
 # Cálculo de accuracy basado en predecir con la moda:
 accuracy_train <- evaluate_naive_method(train_n$scaled_data, "CTRL")
 accuracy_val <- evaluate_naive_method(val_n, "CTRL")
+accuracy_test <- evaluate_naive_method(test_n, "CTRL")
 
 sprintf("Training naive accuracy: %.2f", accuracy_train)
 sprintf("Validation naive accuracy: %.2f", accuracy_val)
 
 # Comparación con rendimiento obtenido:
 
-binary_accuracy <- evaluation_results[2]
-f1 <- evaluation_results[3]
+
+names(evaluation_results[3]) <- "f1_score"
 
 # Imprimir los resultados de evaluación:
 
-sink(file.path(resultsdir, "model_1_LSTM_onehot_samples.txt"))
-
-naive <- evaluate_naive_method(train_n$scaled_data, "CTRL")
+sink(file.path(resultsdir, "modelgc_1_LSTM_onehot_samples.txt"))
 
 for (i in 1:length(metric_names)) {
   metric <- metric_names[i]
@@ -1826,31 +1833,27 @@ for (i in 1:length(metric_names)) {
   cat(sprintf("%s: %f\n", metric, value))
 }
 
-eval_model <- cbind(train_n$stdev[[2]], train_n$stdev[[1]],
-                    train_n$stdev[[3]], 
-                    naive*train_n$stdev[[3]],
-                    mae*train_n$stdev[[3]])
-
-colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR",
-                          "SD","NAIVE_MAE*SD","MAE*SD")
-eval_model
+sprintf("Training naive accuracy: %.2f", accuracy_train)
+sprintf("Validation naive accuracy: %.2f", accuracy_val)
+sprintf("Test naive accuracy: %.2f", accuracy_val)
 
 # Cerrar el archivo de salida
 sink()
 
 ```
 
-### Evaluación por categorías.
+## Evaluación por categorías.
 
 ```{r model evaluation per category}
-# Función para seleccionar los índices en test_indx que corresponden a una combinación determinada de CODIGO_PRUEBA, NIVEL Y ANALIZADOR: 
+# Función para seleccionar los índices en test_indx que corresponden a una combinación determinada de CODIGO_PRUEBA, Y ANALIZADOR. Usa el argumento n según la estructura de datos en función de si hay wavelets o no:
 
-index_select <- function() {
+n <- 11 # Sin wavelets ni analizador
+
+index_select <- function(n) {
   
-  # Opciones para elegir CLC, NIVEL y ANALIZADOR:
+  # Opciones para elegir CLC y ANALIZADOR:
   clc_opt <- test_code$levels$CODIGO_PRUEBA
-  level_opt <- test_code$levels$NIVEL
-  anal_opt <- test_code$levels$ANALIZADOR
+  #anal_opt <- test_code$levels$ANALIZADOR
   
   # Introducción de la fecha por el usuario:
   #date <- readline(
@@ -1862,23 +1865,18 @@ index_select <- function() {
   clc <- clc_opt[menu(clc_opt, 
                       title = "Código CLC de prueba: ",
                       graphics = T)]
-  level <- level_opt[menu(level_opt, 
-                          title = "Nivel de QC: ",
-                          graphics = T)]
-  anal <- anal_opt[menu(anal_opt, 
-                        title = "Analizador: ",
-                        graphics = T)]
+  #anal <- anal_opt[menu(anal_opt, 
+  #                      title = "Analizador: ",
+  #                      graphics = T)]
     
   cat("Indice correspondiente a la prueba: ", clc, "\n", 
-  "nivel: ", level, "\n",
-  "analizador: ", anal, "\n")
+  "analizador: ")#, anal, "\n")
   
   # Conversión de las variables introducidas en índice:
   
-  col_clc <- which(grepl(clc, names(test_indx)))-16
-  col_level <- which(grepl(paste0("NIVEL_", level), names(test_indx)))-16
-  col_anal <- which(grepl(anal, names(test_indx)))-16
-  pos <- list(col_clc, col_level, col_anal)
+  col_clc <- which(grepl(clc, names(test_indx)))-n
+  #col_anal <- which(grepl(anal, names(test_indx)))-n
+  pos <- list(col_clc)#, col_anal)
   
   code <- rep(0, length(categorical_vars+2))
   
@@ -1894,12 +1892,12 @@ index_select <- function() {
   
 }
 
-index_pred <- index_select()
+index_pred <- index_select(n)
 
   test_pred <- lapply(index_pred, function(idx) {
     create_lstm_data.2(
       data = as.matrix(test_indx[test_indx[,"index"] == idx,
-                                 -c(1, 3:16, length(test_indx))]),
+                                 -c(1, length(test_indx))]),
       lookback = lookback,
       delay = delay,
       batch_size = batch_size,
@@ -1917,8 +1915,16 @@ index_pred <- index_select()
 
 # Obtener las series y sus predicciones utilizando la función generadora de tests por categorías y obtener la predicción del modelo:
 x <- test_pred[[1]]()[[1]]
-y_pred <-  predict(model, x = x)
+y_pred <- predict(model, x, probability = T)
 y_true <- test_pred[[1]]()[[2]]
+
+perf <- performance(y_pred, "tpr","fpr")
+
+roc(as.vector(y_true), as.vector(y_pred), plot = TRUE, 
+    legacy.axes = TRUE,
+    percent = TRUE, xlab = "Porcentaje Falsos positivos",
+    ylab = "Porcentaje verdaderos postivios", col = "#377eb8", lwd = 2,
+    print.auc = TRUE)
 
 metrics <- list(
   MSE <- mse(actual = y_true, predicted = y_pred),
@@ -1993,16 +1999,13 @@ reverse_index_select <- function(index) {
   # Encontrar las posiciones de los 1 en la secuencia de dígitos
   pos_anal <- which(digits == "1")[1]
   pos_clc <- which(digits == "1")[2]
-  pos_level <- which(digits == "1")[3]
   
   # Obtener los valores de anal, clc y level
   anal <- names(test_indx)[16 + pos_anal]
   clc <- names(test_indx)[16 + pos_clc]
-  level <- names(test_indx)[16 + pos_level]
   
   # Devolver los valores encontrados
   result <- list(CÓDIGO_PRUEBA = substr(clc, 15, 22),
-                 NIVEL = level, 
                  ANALIZADOR = anal)
   return(result)
 }

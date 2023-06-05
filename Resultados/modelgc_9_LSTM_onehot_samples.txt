@@ -1,0 +1,6 @@
+loss: 0.238090
+binary_accuracy: 0.919200
+python_function: 0.035352
+'Training naive accuracy: 0.94'
+'Validation naive accuracy: 0.93'
+'Test naive accuracy: 0.93'
