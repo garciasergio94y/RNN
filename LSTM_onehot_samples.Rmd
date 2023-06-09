@@ -479,6 +479,29 @@ wavelet_tr <- function(df) {
 }
 ```
 
+## Función ```sub_sample```
+
+Realiza un submuestreo estratificado aleatorio de la clase mayoritaria CTRL = 0, sustituyendo las entradas de esta clase por las seleccionadas aleatoriamente después de agrupar por fecha y código de prueba.
+
+```{r subsampling majority class}
+sub_sample <- function(ds, prop){
+  ss0 <- ds %>%
+  mutate(FECHAS = as.Date(TIEMPO_MUESTRA)) %>%
+  group_by(FECHAS, CODIGO_PRUEBA, CTRL) %>%
+  filter(CTRL == 0) %>%
+  slice_sample(prop = prop) %>%
+  ungroup() %>%
+  select(-FECHAS)
+  
+  ds_ss <- rbind(ds %>% filter(CTRL == 1), ss0)
+  ds_ss %<>% arrange(TIEMPO_MUESTRA)
+  
+  return(ds_ss)
+}
+
+```
+
+
 ## Función ```normalize_train```.
 
 Para la normalización de las variables continuas del dataset de entrenamiento y sustitución de valores NA en los coeficientes wavelet por un valor numérico arbitrario fácilmente enmascarable. Devuelve también una lista de vectores de medias y de desviaciones estándar que luego se usan como argumentos en para las funciones de normalización de los datasets de validación y test. De esta forma, el escalado y normalización se realiza con la misma media y desviación del set de entrenamiento para los otros dos datasets.
@@ -827,11 +850,13 @@ data <- merge(featqc_event,
   iqtests$data.NOMBRE_PRUEBA.x <- 
     iconv(iqtests$data.NOMBRE_PRUEBA.x, to = "UTF-8")
   iqtests <- iqtests[complete.cases(iqtests),]
+  names(iqtests) <- c("NOMBRE_PRUEBA", "CODIGO_PRUEBA")
 
   # Sustitución en data de los nombres de prueba incorrectos:
   data$NOMBRE_PRUEBA.x <-
-    iqtests$data.NOMBRE_PRUEBA.x[match(data$CODIGO_PRUEBA,
-                                       iqtests$data.CODIGO_PRUEBA)]
+    iqtests$NOMBRE_PRUEBA[match(data$CODIGO_PRUEBA,
+                                iqtests$CODIGO_PRUEBA)]
+
 ```
 
 ## Selección de características de interés y transformación wavelet de los datos de resultados de medidas.
@@ -840,13 +865,14 @@ data <- merge(featqc_event,
 data_sel <- subset(data, 
                    select = c(TIEMPO_MUESTRA, PACIENTE_SEXO,
                               PACIENTE_EDAD, RESULTADO, ANALIZADOR,
-                              CODIGO_PRUEBA, NOMBRE_PRUEBA.x, CTRL))
+                              CODIGO_PRUEBA, NOMBRE_PRUEBA.x, CTRL)) %>%
+  unique()
 
 # Aplicar la transformación wavelet a la variable RESULTADOS para cada grupo de técnica:
 
 
 # Aplicar la función wavelet_tr al dataframe data_sel
-data_wavelet <- wavelet_tr(data_sel)
+data_wavelet <- wavelet_tr(data_sel) 
 
 
 # Escalograma procalcitonina (CLC00638):
@@ -931,15 +957,10 @@ ggsave(file.path(figuresdir, "QC_state.jpeg"),
        width = 30, height = 20, units = "cm", dpi = 300, 
        device = "jpeg")
 
-# Plots resultados QC a lo largo del tiempo divididos por material de control
-test_list <- unique(data.frame(featqc_event$NOMBRE_PRUEBA.x,
-                    featqc_event$CODIGO_PRUEBA)) 
-colnames(test_list) <- c("NOMBRE_PRUEBA", "CODIGO_PRUEBA")
 
-
-for (i in seq_along(test_list$CODIGO_PRUEBA)) {
+for (i in seq_along(iqtests$CODIGO_PRUEBA)) {
   ggplot_qc_DxI_1 <- subset(qc_results,
-                        CODIGO_PRUEBA == test_list$CODIGO_PRUEBA[i])
+                        CODIGO_PRUEBA == iqtests$CODIGO_PRUEBA[i])
   plot <- ggplot(ggplot_qc_DxI_1, mapping =
                    aes(x=TIEMPO_QC,
                        y=QC_RESULT,
@@ -951,7 +972,7 @@ for (i in seq_along(test_list$CODIGO_PRUEBA)) {
                              "%b",
                    limits = as.POSIXct(c("2022-07-01 00:00:00",
                                         "2023-03-01 23:59:59"))) + 
-          ggtitle(paste(test_list$NOMBRE_PRUEBA[i])) +
+          ggtitle(paste(iqtests$NOMBRE_PRUEBA[i])) +
           theme(plot.title = element_text(size="10",
                                           face="bold",hjust = 0)) +
           theme(axis.title.x = element_text(size="10")) +
@@ -964,11 +985,12 @@ for (i in seq_along(test_list$CODIGO_PRUEBA)) {
           theme(plot.margin = margin(t = 1, r = 1, b = 1, l = 1,
                                      unit = "cm")) +
           scale_color_manual(values = c("red", "blue", "green", 
-                                        "black", "orange", "cyan"),
+                                        "black", "orange", "cyan",
+                                        "yellow"),
                              name = "Control")
   
   ggsave(plot,
-         file=paste(test_list$NOMBRE_PRUEBA[i], "qc.png", sep='_'),
+         file=paste(iqtests$NOMBRE_PRUEBA[i], "qc.png", sep='_'),
          path = file.path(figuresdir, "Controles"),
          width=15, height = 10, units=c("cm"))  
 }
@@ -1022,7 +1044,7 @@ for (i in seq_along(plot_list)) {
 
 }
 
-plot_ctrl_dist(data_sel_tr, iqtests$data.CODIGO_PRUEBA)
+plot_ctrl_dist(data_sel_tr, iqtests$CODIGO_PRUEBA)
 ```
 
 
@@ -1067,195 +1089,7 @@ test <- data_sel_tr %>%
   subset(.[[1]] > time_point_75)
   
 table(test$NOMBRE_PRUEBA.x, test$CTRL)
-```
-
-
-### Downsampling:
-
-```{r downsampling majority class}
-
-# Seleccionar entradas en los que no existan casos con la categoría minoritaria CTRL = 1
-
-selected_cases_0 <- data_sel_tr %>%
-  group_by(as.Date(TIEMPO_MUESTRA)) %>%
-  filter(!any(CTRL == 1))
-
-# Seleccionar el resto de entradas (sí existan casos con la categoría minoritaria CTRL = 1):
-selected_cases_1 <- data_sel_tr %>%
-  group_by(as.Date(TIEMPO_MUESTRA)) %>%
-  filter(any(CTRL == 1))
-
-# Downsampling seleccionando una cantidad equilibrada de muestras de la categoría mayoritaria de CTRL para cada grupo de CODIGO_PRUEBA:
-downsampled_data <- selected_cases_0 %>%
-  group_by(CODIGO_PRUEBA) %>%
-  # Selección aleatoria del 1% de casos con CTRL = 0: 
-  slice_sample(prop = 0.01, replace = FALSE) %>%
-  ungroup()
-
-data_sel_tr_ds <- bind_rows(downsampled_data, selected_cases_1)
-data_sel_tr_ds %<>% arrange(TIEMPO_MUESTRA) %>%
-  as.data.frame(.) %>% .[,-length(.)]
-
-# Verificar el resultado
-table(data_sel_tr_ds$NOMBRE_PRUEBA.x, data_sel_tr_ds$CTRL)
-#plot_ctrl_dist(data_sel_tr_ds, iqtests$data.CODIGO_PRUEBA)
-
-```
-
-```{r dataset division with downsampled data}
-
-time_point_50 <- as.POSIXct(as.Date(
-  quantile(data_sel_tr_ds[,1], 0.5)))
-
-time_point_75 <- as.POSIXct(as.Date(
-  quantile(data_sel_tr_ds[,1], 0.75)))
-
-# Muestra de entrenamiento:
-train <- data_sel_tr_ds %>%
-  subset(.[[1]] <= time_point_50)
-
-val <- data_sel_tr_ds %>%
-  subset(.[[1]] > time_point_50 &
-         .[[1]] <= time_point_75)
-
-test <- data_sel_tr_ds %>%
-  subset(.[[1]] > time_point_75)
-
-table(train$NOMBRE_PRUEBA.x, train$CTRL)
-table(val$NOMBRE_PRUEBA.x, val$CTRL)
-table(test$NOMBRE_PRUEBA.x, test$CTRL)
-```
-
-
-### Exclusión del modelo general de las técnicas que no alcanzan representación de las categorías CTRL = 0/1 en todos los datasets.
-
-```{r CLC exclusion}
-
-# Filtrado por código de pruebas que en alguno de los data set no tienen representación en la categoría CTRL = 1, y creación de una lista.
-clc_sel <- list()
-
-clc_sel[[1]] <- train_ds %>%
-  group_by(CODIGO_PRUEBA) %>%
-  filter(all(CTRL != 1))
-
-clc_sel[[2]] <- val_ds %>%
-  group_by(CODIGO_PRUEBA) %>%
-  filter(all(CTRL != 1))
-
-clc_sel[[3]] <- test_ds %>%
-  group_by(CODIGO_PRUEBA) %>%
-  filter(all(CTRL != 1))
-
-# Unión de los elementos de la lista y extracción de los CODIGO_PRUEBA que las componen:
-clc_sel %<>% do.call(rbind, .)
-clc_other <- unique(clc_sel$CODIGO_PRUEBA)
-
-# Subsetting de los dataframes de train, validation y test eliminando las entradas correspondientes a las pruebas encontradas en el paso anterior:
-train_ds %<>% subset(., !(CODIGO_PRUEBA %in% clc_other))
-val_ds %<>% subset(., !(CODIGO_PRUEBA %in% clc_other))
-test_ds %<>% subset(., !(CODIGO_PRUEBA %in% clc_other))
-
-# Distribución tras la eliminación de estas pruebas
-
-table(train_ds$NOMBRE_PRUEBA.x, train_ds$CTRL)
-table(val_ds$NOMBRE_PRUEBA.x, val_ds$CTRL)
-table(test_ds$NOMBRE_PRUEBA.x, test_ds$CTRL)
-```
-
-### Downsampling de los datasets de entrenamiento, validacíon y prueba para las pruebas con baja representación de la categoría CTRL = 1.
-
-```{r other CLC downsampling majority class}
-# Exclusión de la prueba Ac. anti tiroglobulina (CLC00415) por no tener ningún caso con CTRL = 1:
-
-clc_other <- clc_other[-which(clc_other=="CLC00415")]
-
-# Subsetting del dataset original:
-data_sel_tr_other <- data_sel_tr %>%
-  subset(., (CODIGO_PRUEBA %in% clc_other))
-
-# Seleccionar entradas en los que no existan casos con la categoría minoritaria CTRL = 1
-
-selected_cases_0 <- data_sel_tr_other %>%
-  group_by(as.Date(TIEMPO_MUESTRA)) %>%
-  filter(!any(CTRL == 1))
-
-# Seleccionar el resto de entradas (sí existen casos con la categoría minoritaria CTRL = 1):
-selected_cases_1 <- data_sel_tr_other %>%
-  group_by(as.Date(TIEMPO_MUESTRA)) %>%
-  filter(any(CTRL == 1))
-
-# Downsampling seleccionando una cantidad equilibrada de muestras de la categoría mayoritaria de CTRL para cada grupo de CODIGO_PRUEBA:
-downsampled_data <- selected_cases_0 %>%
-  group_by(CODIGO_PRUEBA) %>%
-  # Selección aleatoria del 1% de casos con CTRL = 0: 
-  slice_sample(prop = 0.01, replace = FALSE) %>%
-  ungroup()
-
-data_sel_tr_otherds <- bind_rows(
-  downsampled_data[,-length(downsampled_data)],
-  selected_cases_1[,-length(selected_cases_1)])
-
-data_sel_tr_otherds %<>% arrange(TIEMPO_MUESTRA) %>%
-  as.data.frame(.)
-
-# Verificar el resultado
-table(data_sel_tr_otherds$NOMBRE_PRUEBA.x, data_sel_tr_otherds$CTRL)
-plot_ctrl_dist(data_sel_tr_other, clc_other)
-
-```
-
-### Creación de datasets individuales para las pruebas con distribución desigual de la variable CTRL a lo largo del tiempo.
-
-Estas pruebas se van a tratar con modelos individualizados. Al contener las series temporales que se creen datos de una única prueba, se eliminará la separación en días para tratar todo el dataset como una serie temporal continua. El estado de la variable CTRL se escogerá a partir de la muestra k de la serie temporal, asumiendo que dada la baja frecuencia de series fuera de control y al uso de valores de lookback no excesivamente altos, no se mezclarán valores de una serie controlada con otros de una descontrolada.
-
-```{r}
-# Creación de una lista con todos los dataframes que contienen los valores de cada prueba:
-
-data_set_list <- list()
-
-data_set_list[1] <- data_sel_AFP <- data_sel_tr %>%
-  subset(CODIGO_PRUEBA == "CLC00813")
-data_set_list[2] <- data_sel_HCG <- data_sel_tr %>%
-  subset(CODIGO_PRUEBA == "CLC11768")
-data_set_list[3] <- data_sel_cortisol <- data_sel_tr %>%
-  subset(CODIGO_PRUEBA == "CLC11977")
-data_set_list[4] <- data_sel_PTH <- data_sel_tr %>%
-  subset(CODIGO_PRUEBA == "CLC11015")
-data_set_list[5] <- data_sel_CA199 <- data_sel_tr %>%
-  subset(CODIGO_PRUEBA == "CLC00817")
-data_set_list[6] <- data_sel_E2 <- data_sel_tr %>%
-  subset(CODIGO_PRUEBA == "CLC11837")
-data_set_list[7] <- data_sel_testo <- data_sel_tr %>%
-  subset(CODIGO_PRUEBA == "CLC11854")
-
-
-time_point_50 <- as.POSIXct(as.Date(
-  quantile(data_sel_tr_other[,1], 0.5)))
-time_point_50
-
-time_point_75 <- as.POSIXct(as.Date(
-  quantile(data_sel_tr_other[,1], 0.75)))
-time_point_75
-
-# Muestra de entrenamiento:
-train_other <- data_sel_tr_other %>%
-  subset(.[[1]] <= time_point_50)
-
-val_other <- data_sel_tr_other %>%
-  subset(.[[1]] > time_point_50 &
-         .[[1]] <= time_point_75)
-
-test_other <- data_sel_tr_other %>%
-  subset(.[[1]] > time_point_75)
-
-```
-
-```{r CTRL distribution in other datasets}
-# Distribución de la variable CTRL en los nuevos datasets
-
-table(train_other$NOMBRE_PRUEBA.x, train_other$CTRL)
-table(val_other$NOMBRE_PRUEBA.x, val_other$CTRL)
-table(test_other$NOMBRE_PRUEBA.x, test_other$CTRL)
+length(unique(train))
 ```
 
 ## Normalización de los datasets.
@@ -1273,18 +1107,77 @@ test_n <- test %>% norm_test_val(means = train_n$means,
 ```
 
 
+## Downsampling de casos con CTRL=0
+
+Se emplea la función ```sub_sample``` diseñada para eliminar la proporción deseada de casos pertenecientes a la clase CTRL = 0 por muestre estratificado aleatorio.
+```{r}
+set.seed(123)
+
+train_ss <- train_n$scaled_data %>% sub_sample(prop=0.3)
+
+val_ss <- val_n %>% sub_sample(prop=0.3)
+
+test_ss <- test_n %>% sub_sample(prop=0.3)
+
+table(train_ss$NOMBRE_PRUEBA.x, train_ss$CTRL)
+
+table(val_ss$NOMBRE_PRUEBA.x, val_ss$CTRL)
+
+table(test_ss$NOMBRE_PRUEBA.x, test_ss$CTRL)
+
+```
+
+
+### Exclusión del modelo general de las técnicas que no alcanzan representación de la categoría CTRL = 1 en todos los datasets.
+
+```{r CLC exclusion}
+# Filtrado por código de pruebas que en alguno de los data set no tienen representación en la categoría CTRL = 1, y creación de una lista.
+
+clc_sel <- list()
+
+clc_sel[[1]] <- train_ss %>%
+  group_by(CODIGO_PRUEBA) %>%
+  filter(all(CTRL != 1))
+
+clc_sel[[2]] <- val_ss %>%
+  group_by(CODIGO_PRUEBA) %>%
+  filter(all(CTRL != 1))
+
+clc_sel[[3]] <- test_ss %>%
+  group_by(CODIGO_PRUEBA) %>%
+  filter(all(CTRL != 1))
+
+# Unión de los elementos de la lista y extracción de los CODIGO_PRUEBA que las componen:
+clc_sel %<>% do.call(rbind, .)
+clc_other <- unique(clc_sel$CODIGO_PRUEBA)
+
+# Subsetting de los dataframes de train, validation y test eliminando las entradas correspondientes a las pruebas encontradas en el paso anterior:
+train_sel <- train_ss %>% subset(., !(CODIGO_PRUEBA %in% clc_other))
+val_sel <- val_ss %>% subset(., !(CODIGO_PRUEBA %in% clc_other))
+test_sel <- test_ss %>% subset(., !(CODIGO_PRUEBA %in% clc_other))
+
+# Distribución tras la eliminación de estas pruebas
+
+table(train_sel$NOMBRE_PRUEBA.x, train_sel$CTRL)
+table(val_sel$NOMBRE_PRUEBA.x, val_sel$CTRL)
+table(test_sel$NOMBRE_PRUEBA.x, test_sel$CTRL)
+
+cat("Técnicas que no pueden entrenarse con estos datasets: ", clc_other)
+```
+
+
 ## Codificación de variables mediante one-hot.
 
 ### Con wavelets.
 
 ```{r one-hot coding with wavelets}
-train_code <- code_cat_var(subset(train_n$scaled_data,
+train_code <- code_cat_var(subset(train_sel,
                                   select = -NOMBRE_PRUEBA.x))
 
-val_code <- code_cat_var(subset(val_n,
+val_code <- code_cat_var(subset(val_sel,
                                   select = -NOMBRE_PRUEBA.x))
 
-test_code <- code_cat_var(subset(test_n,
+test_code <- code_cat_var(subset(test_sel,
                                   select = -NOMBRE_PRUEBA.x))
 
 ```
@@ -1292,14 +1185,14 @@ test_code <- code_cat_var(subset(test_n,
 ### Sin wavelets.
 
 ```{r}
-train_code <- code_cat_var(subset(train_n$scaled_data,
-                                  select = -c(3:20, NOMBRE_PRUEBA.x)))
+train_code <- code_cat_var(subset(train_sel,
+                                  select = -c(3:18, NOMBRE_PRUEBA.x)))
 
-val_code <- code_cat_var(subset(val_n,
-                                  select = -c(3:20, NOMBRE_PRUEBA.x)))
+val_code <- code_cat_var(subset(val_sel,
+                                  select = -c(3:18, NOMBRE_PRUEBA.x)))
 
-test_code <- code_cat_var(subset(test_n,
-                                  select = -c(3:20, NOMBRE_PRUEBA.x)))
+test_code <- code_cat_var(subset(test_sel,
+                                  select = -c(3:18, NOMBRE_PRUEBA.x)))
 ```
 
 
@@ -1314,19 +1207,32 @@ Se crean funciones generadoras que crearán series temporales de datos de longit
 
 # categorical_vars <- c(12:38) # Todas las técnicas, 
                              #sin analizador ni wavelets
-#categorical_vars <- c(10:38) # Todas las técnicas y analizadores
+categorical_vars <- c(10:38) # Todas las técnicas y analizadores
                              # sin wavelets
-categorical_vars <- c(12:38) # Técnicas seleccionadas, 
+# categorical_vars <- c(12:38) # Técnicas seleccionadas, 
                               # sin analizador ni wavelets
  
-#categorical_vars <- c(39) # Clasificación según variable respuesta, sin                              wavelets
+# categorical_vars <- c(39) # Clasificación según variable respuesta, sin                              wavelets
 # categorical_vars <- c(57) # Clasificación según variable respuesta, con                              wavelet
 
+# Downsampling por codificación.
+num_date <- as.numeric(as.Date(train_code$data[,1]))
 train_indx <- unique_lab_cases(train_code$data,
                                categorical_vars)
-
+train_indx$code <- paste0(train_indx$CTRL, "#", train_indx$code, "#",
+                          num_date
+                          )
 # Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
-code_values <- unique(train_indx[,"code"])
+code_values <- data.frame(unique(train_indx[,"code"]))
+colnames(code_values) <- "code"
+                          
+code_values %<>%
+  mutate(.,index = as.numeric(substr(code_values[,1], 1,1)))
+code_values %<>% arrange(index)
+code_subsample <- sample()
+
+
+code_values %>% arrange(code_values$...2)
 code_dictionary <- data.frame(code = code_values)
 code_dictionary %<>%  
   mutate(., index = as.numeric(factor(code_values, 
@@ -1346,9 +1252,6 @@ combinations_train <- expand.grid(index = unique_indexes,
                                   ctrl = 0:1)
                           #  date = unique(train_indx$TIEMPO_MUESTRA))
 
-# Opción 2: generamos series de tiempo sin tener en cuenta la pertenencia al día anterior. Pueden incluir medidas pertenecientes a varios días si la técnica se mide con baja frecuencia, y en ese caso el estado CTRL siempre estará referido al último valor de la serie temporal. 
-
-
 
 ```
 
@@ -1356,13 +1259,13 @@ combinations_train <- expand.grid(index = unique_indexes,
 # Creación de lista de funciones generadoras de las series temporales de longitud k por categoría de CODIGO_PRUEBA del dataset de entrenamiento. Se generan series para cada día de observación conteniendo los resultados pertenecientes a cada una de las categorías elegidas:
 
 # Hiperparámetros para generar las series temporales:
-lookback <- 20 # Longitud de la secuencia previa al target.
+lookback <- 50 # Longitud de la secuencia previa al target.
 delay <- 0 # Se escoge 0 debido a que los targets futuros ya se                 colocaron en la misma fila que la muestra del día                  anterior.
-batch_size <- 10000 # Tamaño de batch.
-min_index <- 1 # Indice de partida de la serie temporal.
+batch_size <- 50 # Tamaño de batch.
+min_index <- 0 # Indice de partida de la serie temporal.
 predseries <- length(train_indx) - 2 # Posición en el dataset de la variable a predecir (CTRL) una vez eliminados TIEMPO_MUESTRA e index.
 
-train_k <- mapply(function(index, ctrl) {#, date) {
+train_k <- mapply(function(ctrl, index) {#, date) {
   data <- as.matrix(
   train_indx[#train_indx[,"TIEMPO_MUESTRA"] == date &
              train_indx[,"CTRL"] == ctrl &  
@@ -1379,9 +1282,9 @@ train_k <- mapply(function(index, ctrl) {#, date) {
     max_index = max_index,
     predseries = predseries)
 },
-index = combinations_train$index,
-ctrl = combinations_train$ctrl,
 #index = combinations_train$index,
+ctrl = combinations_train$ctrl,
+index = combinations_train$index,
 #date = combinations_train$date,
 SIMPLIFY = T
 )
@@ -1390,7 +1293,68 @@ SIMPLIFY = T
 train_steps <- length(train_k) # En cada step se generarán las series temporales correspondientes a cada índice.
 ```
 
+### Función generadora de series temporales.
+
+```{r}
+train_data <- as.matrix(train_code$data[,-1])
+lookback <- 50
+batch_size <- 32
+delay <- 0
+min_index <- 0
+max_index <- nrow(train_data) - delay -1
+predseries <- ncol(train_data)
+
+train_k <-  create_lstm_data.1(
+    data = train_data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = max_index,
+    predseries = predseries)
+
+
+# Cálculo del número de steps de training:
+train_steps <- round((nrow(train_data)-lookback) / batch_size) 
+```
+
 ### Dataset de validación.
+
+```{r}
+val_data <- as.matrix(val_code$data[,-1])
+
+val_k <-  create_lstm_data.1(
+    data = val_data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = max_index,
+    predseries = predseries)
+
+
+# Cálculo del número de steps de training:
+val_steps <- round((nrow(val_data)-lookback) / batch_size) 
+```
+
+### Dataset de test.
+
+```{r}
+test_data <- as.matrix(test_code$data[,-1])
+
+test_k <-  create_lstm_data.1(
+    data = test_data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = max_index,
+    predseries = predseries)
+
+
+# Cálculo del número de steps de training:
+test_steps <- round((nrow(test_data)-lookback) / batch_size) 
+```
 
 ```{r Validation set case grouping}
 
@@ -1454,7 +1418,7 @@ val_steps <- length(val_k)
 # Función para ajustar la probabilidad de muestrear secuencias según valor de la variable CTRL.
 
 sampling_prob <- function(index, prob_red) {
-  index_num <- length(index)
+  index_0 <- length(index)
   half_point <- index_num / 2
   
   # Crear vector de probabilidades de muestreo
@@ -1472,9 +1436,9 @@ val_probs <- sampling_prob(combinations_val$index, 1)
 
 ```
 
-## Función generadora global ```global_gen```.
+## Funciones generadoras globales ```train_gen``` y ```val_gen```.
 
-Función generadora global de series temporales para los datasets de train y validación. Genera de manera indefinida series con los datos, bien de entrenamiento, bien de  validación. Se basa en un muestreo aleatorio de la lista de índices únicos con la que se han definidos las funciones generadoras almacenadas en train_k o val_k, que son las que realmente producen la serie temporal con el tamaño definido por lookbak y en cantidad definida por batch_size. Al haber incluido la variable resultado CTRL en la definición de los índices, y haber creado un vector de probabilidades dando mayor peso a los índices que representan casos con la variable CTRL = 1, la función de generación global llamará  con mayor probabilidad a las series de datos con valores 1 de la variable CTRL, resultando en un submuestreo de la categoría mayoritaria para compensar así el desequilibrio entre ambas.
+Funciones generadoras globales de series temporales para los datasets de train y validación. Genera de manera indefinida series con los datos, bien de entrenamiento, bien de  validación. Se basa en un muestreo aleatorio de la lista de índices únicos con la que se han definidos las funciones generadoras almacenadas en train_k o val_k, que son las que realmente producen la serie temporal con el tamaño definido por lookbak y en cantidad definida por batch_size. Al haber incluido la variable resultado CTRL en la definición de los índices, y haber creado un vector de probabilidades dando mayor peso a los índices que representan casos con la variable CTRL = 1, la función de generación global llamará  con mayor probabilidad a las series de datos con valores 1 de la variable CTRL, resultando en un submuestreo de la categoría mayoritaria para compensar así el desequilibrio entre ambas.
 Si la función global llama a una función generadora que no tenga suficientes datos como para generar una serie de longitud lookback, se genera una error que es capturado con trycatch y se intenta una siguiente llamada a otra generadora hasta que se devuelve alguna serie, estando diseñadas para funcionar indefinidamente.
 
 ### Aleatorizadas:
@@ -1566,6 +1530,8 @@ test_gen <- function() {
 indexes_train <- sample(length(train_k),
                         replace = T,
                         prob = train_probs)
+
+
 # Iniciamos un contador externo a la función.
 counter_train <- 1
 
@@ -1616,7 +1582,8 @@ train_gen <- function() {
 # Análoga a la anterior:
 
 indexes_val <- sample(length(val_k),
-                        replace = F,
+                      replace = F,
+                      prob = val_probs
                         )
 
 counter_val <- 1
@@ -1664,7 +1631,7 @@ val_gen <- function() {
 
 # Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de test:
 
-categorical_vars_test <- c(12:38) # Todas las técnicas, 
+#categorical_vars_test <- c(12:38) # Todas las técnicas, 
                              #sin analizador ni wavelets
 #categorical_vars_test <- c(10:38) # Todas las técnicas y analizadores
                              # sin wavelets
@@ -1710,7 +1677,7 @@ SIMPLIFY = T
 ) 
 
 # Cálculo del número de steps de training:
-test_steps <- nrow(test_code$data) - lookback) / batch_size)
+test_steps <- (nrow(test_code$data) - lookback) / batch_size
 ```
 
 
@@ -1801,17 +1768,17 @@ model_1 <- keras_model_sequential() %>%
   
   #layer_masking(mask_value = -99999, input_shape = input_shape) %>%
   layer_lstm(units = 32,
-             dropout = 0.8,
-             recurrent_dropout = 0.6,
+             dropout = 0.5,
+             recurrent_dropout = 0.5,
              return_sequences = F,
              kernel_regularizer = regularizer_l2(l = 0.001),
              input_shape = c(NULL, k, p)) %>%
-  #layer_lstm(units = 16,
-   #          dropout = 0.3,
-    #         recurrent_dropout = 0.1,
-     #        return_sequences = F,
+ # layer_lstm(units = 16,
+  #           dropout = 0.5,
+   #          recurrent_dropout = 0.5,
+    #         return_sequences = F,
              # kernel_regularizer = regularizer_l2(l = 0.001),
-       #      input_shape = c(NULL, k, p)) %>%
+     #        input_shape = c(NULL, k, p)) %>%
   #layer_lstm(units = 32,
   #           dropout = 0.3,
   #           recurrent_dropout = 0,
@@ -1864,7 +1831,7 @@ callbacks <- list(
 
 tensorboard(file.path(resultsdir, "run_a"), port=8088)
 
-# tensorboard dev upload --logdir ./
+# tensorboard dev upload --logdir ./ --name "LSTM_onehot_samples_2" --description "LSTM16do0.5rdo0.5 lr0.0001 ds0.1 cv1238 lb20"
 
 history_1 <- model_1 %>% fit_generator(
   generator = train_gen,
@@ -1876,7 +1843,7 @@ history_1 <- model_1 %>% fit_generator(
 )
 
 
-valplot(history_1)
+plot(history_1)
 ```
 
 # Evaluación del modelo LSTM
