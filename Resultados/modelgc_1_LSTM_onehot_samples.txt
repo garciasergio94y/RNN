@@ -1,6 +1,0 @@
-loss: 0.380134
-binary_accuracy: 0.882033
-python_function: 0.000000
-[1] "Training naive accuracy: 0.94"
-[1] "Validation naive accuracy: 0.93"
-[1] "Test naive accuracy: 0.93"

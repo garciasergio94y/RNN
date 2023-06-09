@@ -21,7 +21,8 @@ packages <- c("readr", "readxl", "purrr", "dplyr", "knitr",
               "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
               "tictoc", "wavelets", "reticulate", "abind",
-              "tensorflow", "tfdatasets", "keras", "ModelMetrics")
+              "tensorflow", "tfdatasets", "keras", "ModelMetrics",
+              "ROCR")
 
 # Función para instalar paquetes si no están ya instalados
 install_packages <- function(package) {
@@ -55,6 +56,7 @@ require(tensorflow)
 require(tfdatasets)
 require(keras)
 require(ModelMetrics)
+require(ROCR)
 ```
 
 ## Definición de rutas y directorios
@@ -587,7 +589,7 @@ norm_test_val <- function(data, means, stds) {
 
 Convierte las variables categóricas tipo string en vectores numéricos y realiza una codificción one-hot, creando una lista que retiene en un vector la información de los niveles de los factores. 
 
-```{r one-hot coding functionq1}
+```{r one-hot coding function}
 
 code_cat_var <- function(data) {
   # Eliminación de la columna CODIGO_PRUEBA si solo tiene una          categoría:
@@ -675,19 +677,18 @@ create_lstm_data.1 <-
       rows <- sample(c((min_index+lookback):max_index), 
                      size = batch_size)
     } else {
-      if (i + batch_size >= max_index)
+      if (i + batch_size > max_index)
         i <<- min_index + lookback
-      rows <- c(i:min(i+batch_size, max_index))
+      rows <- c(i:min(i+batch_size-1, max_index))
       i <<- i + length(rows)
     }
     samples <- array(0, dim = c(length(rows),
                                 lookback / step,
-                                dim(data)[[-1]]))
+                                dim(data)[[-1]]-1))
     targets <- array(0, dim = c(length(rows)))
     for (j in 1:length(rows)) {
-      indices <- seq(rows[[j]] - lookback, rows[[j]],
-                     length.out = dim(samples)[[2]])
-      samples[j,,] <- data[indices, ]
+      indices <- (rows[[j]] - lookback + 1):(rows[[j]])
+      samples[j,,] <- data[indices, -predseries]
       targets[[j]] <- data[rows[[j]] + delay, predseries]
     }
     list(samples, targets)
@@ -695,166 +696,6 @@ create_lstm_data.1 <-
   return(gen)
 }
 
-```
-
-## Funciones ```train_gen``` y ```val_gen```.
-
-Funciones generadoras globales de series para train y validation, Estas funciones generan de manera indefinida series con los datos de entrenamiento y validación, usando de manera consecutiva las funciones generadoras individuales almacenadas junto a los subconjuntos de datos con las posibles combinaciones de variables categóricas. Si se llega a la generación última se repite el proceso desde la primera. Incluyen un TryCatch para evitar la parada del modelo si se encuentran secuencias de datos vacías.  
-
-### Secuenciales:
-
-```{r custom generator}
-index_train <- 1
-
-train_gen_seq <- function() {
-  if (index_train > length(train_k)) {
-    index_train <<- 1
-  }
-  
-  sequence <- NULL
-  counter <- 0
-  
-  while (is.null(sequence) && counter < length(train_k)) {
-    sequence <- tryCatch(
-      train_k[[index_train]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la función generadora
-      }
-    )
-    
-    index_train <<- index_train + 1
-    counter <<- counter + 1
-  }
-  
-  return(sequence)
-}
-
-
-index_val <- 1
-
-val_gen_seq <- function() {
-  if (index_val > length(val_k)) {
-    index_val <<- 1
-  }
-  
-  sequence <- NULL
-  counter <- 0
-  
-  while (is.null(sequence) && counter < length(val_k)) {
-    sequence <- tryCatch(
-      val_k[[index_val]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la                               función generadora
-      }
-    )
-    
-    index_val <<- index_val + 1
-    counter <<- counter + 1
-  }
-  
-  return(sequence)
-}
-
-index_test <- 1
-
-test_gen_seq <- function() {
-  if (index_test > length(test_k)) {
-    test_val <<- 1
-  }
-  
-  sequence <- NULL
-  counter <- 0
-  
-  while (is.null(sequence) && counter < length(test_k)) {
-    sequence <- tryCatch(
-      test_k[[index_test]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la                               función generadora
-      }
-    )
-    
-    index_test <<- index_test + 1
-    counter <<- counter + 1
-  }
-  
-  return(sequence)
-}
-
-```
-
-### Aleatorizadas:
-
-```{r random custom generator}
-
-train_gen <- function() {
-  indices <- sample(length(train_k))
-  
-  for (i in indices) {
-    sequence <- tryCatch(
-      train_k[[i]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)
-      }
-    )
-    
-    if (!is.null(sequence)) {
-      return(sequence)
-    }
-  }
-  
-  NULL
-}
-
-
-val_gen <- function() {
-  indices <- sample(length(val_k))
-  
-  for (i in indices) {
-    sequence <- tryCatch(
-      val_k[[i]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)
-      }
-    )
-    
-    if (!is.null(sequence)) {
-      return(sequence)
-    }
-  }
-  
-  NULL
-}
-
-test_gen <- function() {
-  indices <- sample(length(val_k))
-  
-  for (i in indices) {
-    sequence <- tryCatch(
-      test_k[[i]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)
-      }
-    )
-    
-    if (!is.null(sequence)) {
-      return(sequence)
-    }
-  }
-  
-  NULL
-}
 ```
 
 # Carga y preprocesado de los datos 
@@ -1280,9 +1121,9 @@ val <- data_sel_tr_ds %>%
 test <- data_sel_tr_ds %>%
   subset(.[[1]] > time_point_75)
 
-table(train_ds$NOMBRE_PRUEBA.x, train_ds$CTRL)
-table(val_ds$NOMBRE_PRUEBA.x, val_ds$CTRL)
-table(test_ds$NOMBRE_PRUEBA.x, test_ds$CTRL)
+table(train$NOMBRE_PRUEBA.x, train$CTRL)
+table(val$NOMBRE_PRUEBA.x, val$CTRL)
+table(test$NOMBRE_PRUEBA.x, test$CTRL)
 ```
 
 
@@ -1464,19 +1305,25 @@ test_code <- code_cat_var(subset(test_n,
 
 ## Preparación de series temporales de longitud k agrupadas por categorías y por fechas en los datasets de training y validación. 
 
-```{r trainig set case grouping and k length time series creation}
-# Creación de series temporales de tamaño k con los datos de training:
+Se crean funciones generadoras que crearán series temporales de datos de longitud fija k. Para contrarrestar el gran desbalanceo que existe en los datos entre series controladas y fuera de control, ya se crearon funciones generadoras globales, que se encargarán de ejecutar las funciones generadoras. Las funciones generadoras preseleccionan conjuntos de datos con valores definidos de categorías de la variable categórica que se desee, pudiendo estudiar el rendimiento del modelo en estos grupos.
 
-# Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de training usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir (en este caso el código de prueba): 
+### Dataset de training.
 
-categorical_vars <- c(12:38) # Todas las técnicas, sin wavelets
-categorical_vars <- c(12:30) # Técnicas seleccionadas, sin wavelets
+```{r trainig set case grouping}
+# Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de training usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir (en este caso el analizador): 
+
+# categorical_vars <- c(12:38) # Todas las técnicas, 
+                             #sin analizador ni wavelets
+#categorical_vars <- c(10:38) # Todas las técnicas y analizadores
+                             # sin wavelets
+categorical_vars <- c(12:38) # Técnicas seleccionadas, 
+                              # sin analizador ni wavelets
  
-
+#categorical_vars <- c(39) # Clasificación según variable respuesta, sin                              wavelets
+# categorical_vars <- c(57) # Clasificación según variable respuesta, con                              wavelet
 
 train_indx <- unique_lab_cases(train_code$data,
-                               categorical_vars = categorical_vars)
-head(train_indx)
+                               categorical_vars)
 
 # Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
 code_values <- unique(train_indx[,"code"])
@@ -1487,36 +1334,365 @@ code_dictionary %<>%
 
 # Sustituimos los códigos de train_indx por sus índices numéricos:
 train_indx$index <- code_dictionary$index[match(train_indx$code, code_dictionary$code)]
-#index_values <- unique(train_indx[,"index"])
+unique_indexes <- unique(train_indx$index)
 train_indx$code <- NULL
 train_indx %<>% arrange(., train_indx$TIEMPO_MUESTRA)
 
-# Creamos todas las posibles combinaciones de códigos y fechas:
+# Opción 1: generamos series de tiempo solo del día anterior al estado CTRL:
+  # Creamos todas las posibles combinaciones de códigos y fechas:
+#train_indx$TIEMPO_MUESTRA %<>% as.Date()
 
-train_indx$TIEMPO_MUESTRA %<>% as.Date()
+combinations_train <- expand.grid(index = unique_indexes,
+                                  ctrl = 0:1)
+                          #  date = unique(train_indx$TIEMPO_MUESTRA))
 
-combinations_train <- expand.grid(code = code_values,
-                            date = unique(train_indx$TIEMPO_MUESTRA))
+# Opción 2: generamos series de tiempo sin tener en cuenta la pertenencia al día anterior. Pueden incluir medidas pertenecientes a varios días si la técnica se mide con baja frecuencia, y en ese caso el estado CTRL siempre estará referido al último valor de la serie temporal. 
 
-# Traducimos los códigos a índices:
 
-combinations_train$index <-
-  code_dictionary$index[match(combinations_train$code,
-                              code_dictionary$code)]
 
+```
+
+```{r trainig set k length time series creation}
 # Creación de lista de funciones generadoras de las series temporales de longitud k por categoría de CODIGO_PRUEBA del dataset de entrenamiento. Se generan series para cada día de observación conteniendo los resultados pertenecientes a cada una de las categorías elegidas:
 
 # Hiperparámetros para generar las series temporales:
 lookback <- 20 # Longitud de la secuencia previa al target.
 delay <- 0 # Se escoge 0 debido a que los targets futuros ya se                 colocaron en la misma fila que la muestra del día                  anterior.
-batch_size <- 400 # Tamaño de batch.
+batch_size <- 10000 # Tamaño de batch.
 min_index <- 1 # Indice de partida de la serie temporal.
 predseries <- length(train_indx) - 2 # Posición en el dataset de la variable a predecir (CTRL) una vez eliminados TIEMPO_MUESTRA e index.
 
-train_k <- mapply(function(idx, date) {
+train_k <- mapply(function(index, ctrl) {#, date) {
   data <- as.matrix(
-  train_indx[train_indx[,"TIEMPO_MUESTRA"] == date &
-               train_indx[,"index"] == idx,
+  train_indx[#train_indx[,"TIEMPO_MUESTRA"] == date &
+             train_indx[,"CTRL"] == ctrl &  
+             train_indx[,"index"] == index,
+             - c(1, length(train_indx))])
+  max_index <- nrow(data) - delay -1
+  
+  create_lstm_data.1(
+    data = data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = max_index,
+    predseries = predseries)
+},
+index = combinations_train$index,
+ctrl = combinations_train$ctrl,
+#index = combinations_train$index,
+#date = combinations_train$date,
+SIMPLIFY = T
+)
+
+# Cálculo del número de steps de training:
+train_steps <- length(train_k) # En cada step se generarán las series temporales correspondientes a cada índice.
+```
+
+### Dataset de validación.
+
+```{r Validation set case grouping}
+
+# Creación de los índices identificativos de combinaciones de variables categóricas para el set de validación:
+val_indx <- unique_lab_cases(val_code$data, 
+                             categorical_vars)
+
+# Usamos el diccionario de códigos creado anteriormente: 
+val_indx$index <- code_dictionary$index[match(val_indx$code,
+                                           code_dictionary$code)]
+unique_indexes <- unique(train_indx$index)
+val_indx$code <- NULL
+val_indx %<>% arrange(., val_indx$TIEMPO_MUESTRA)
+
+# Opción 1 para el dataset de validación:
+
+# Generar todas las combinaciones de index y CTRL #date para el set de validación:
+
+# val_indx$TIEMPO_MUESTRA %<>% as.Date()
+
+combinations_val <- expand.grid(index = unique_indexes,
+                                ctrl = 0:1)
+                            #date = unique(val_indx$TIEMPO_MUESTRA))
+
+```
+
+
+```{r Validation set k length time series creation}
+# Creación de lista de funciones generadoras del dataset de validación:
+
+val_k <- mapply(function(index, ctrl){#, date) {
+  data <- as.matrix(
+  val_indx[#val_indx[,"TIEMPO_MUESTRA"] == date &
+              val_indx[,"CTRL"] == ctrl & 
+              val_indx[,"index"] == index,
+             - c(1, length(val_indx))])
+  max_index <- nrow(data)-delay-1
+  
+  create_lstm_data.1(
+    data = data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = max_index,
+    predseries = predseries)
+  },
+  index = combinations_val$index,
+  ctrl = combinations_val$ctrl,
+  #index = combinations_val$index,
+  #date = combinations_val$date,
+  SIMPLIFY = T
+)  
+
+# Cálculo del número de steps de validación:
+val_steps <- length(val_k)
+```
+
+
+```{r trainig and val set sampling probability function}
+# Función para ajustar la probabilidad de muestrear secuencias según valor de la variable CTRL.
+
+sampling_prob <- function(index, prob_red) {
+  index_num <- length(index)
+  half_point <- index_num / 2
+  
+  # Crear vector de probabilidades de muestreo
+  sampling_prob <- rep(1, index_num)
+  sampling_prob[1:half_point] <- prob_red
+  
+  # Normalizar probabilidades para que sumen 1
+  sampling_prob <- sampling_prob / sum(sampling_prob)
+  
+  return(sampling_prob)
+}
+
+train_probs <- sampling_prob(combinations_train$index, 0.1)
+val_probs <- sampling_prob(combinations_val$index, 1)
+
+```
+
+## Función generadora global ```global_gen```.
+
+Función generadora global de series temporales para los datasets de train y validación. Genera de manera indefinida series con los datos, bien de entrenamiento, bien de  validación. Se basa en un muestreo aleatorio de la lista de índices únicos con la que se han definidos las funciones generadoras almacenadas en train_k o val_k, que son las que realmente producen la serie temporal con el tamaño definido por lookbak y en cantidad definida por batch_size. Al haber incluido la variable resultado CTRL en la definición de los índices, y haber creado un vector de probabilidades dando mayor peso a los índices que representan casos con la variable CTRL = 1, la función de generación global llamará  con mayor probabilidad a las series de datos con valores 1 de la variable CTRL, resultando en un submuestreo de la categoría mayoritaria para compensar así el desequilibrio entre ambas.
+Si la función global llama a una función generadora que no tenga suficientes datos como para generar una serie de longitud lookback, se genera una error que es capturado con trycatch y se intenta una siguiente llamada a otra generadora hasta que se devuelve alguna serie, estando diseñadas para funcionar indefinidamente.
+
+### Aleatorizadas:
+
+```{r random custom generator}
+train_gen <- function() {
+  
+  indexes <- sample(length(train_k),
+                    replace = T, 
+                    prob = train_probs)
+  
+  for (i in indexes) {
+    sequence <- tryCatch(
+      train_k[[i]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(sequence)) {
+      print(indexes)
+      return(sequence)
+    }
+  }
+  
+  NULL
+}
+
+
+val_gen <- function() {
+  
+  indexes <- sample(length(val_k),
+                    replace = T, 
+                    prob = val_probs)
+  
+  for (i in indexes) {
+    sequence <- tryCatch(
+     val_k[[i]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(sequence)) {
+      return(sequence)
+    }
+  }
+  
+  NULL
+}
+```
+
+
+```{r random custom generator}
+
+
+test_gen <- function() {
+  indices <- sample(length(test_pred))
+  
+  for (i in indices) {
+    sequence <- tryCatch(
+      test_pred[[i]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(sequence)) {
+      return(sequence)
+    }
+  }
+  
+  NULL
+}
+```
+
+
+
+### Secuenciales:
+
+```{r custom generator train}
+# Creamos un muestreo de índices con las probabilidades calculadas para dar más representación a las secuencias con CTRL=1:
+indexes_train <- sample(length(train_k),
+                        replace = T,
+                        prob = train_probs)
+# Iniciamos un contador externo a la función.
+counter_train <- 1
+
+#Definimos la función generadora global:
+train_gen <- function() {
+  if (counter_train > length(train_k)) {
+    counter_train <<- 1
+  } # Condición para resetear el contador si se llega a la última función generadora en train_k
+  
+  # Se selecciona el primer índice de los muestreados:
+  index <- indexes_train[[counter_train]]
+  # Se inicializa la variable que contendrá las secuencias:
+  sequence <- NULL
+  
+  # Se inicializa un loop while en el que la condición para que se mantenga sería que no se generase ninguna secuencia mientras el contador llega a la última función generadora.
+  
+  while (is.null(sequence) && counter_train <= length(train_k)) {
+    sequence <- tryCatch( #tryCatch captura los mensajes de error y                                devuelve una secuencia nula, que mantiene el                             loop while activo para buscar otra.
+      train_k[[index]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la                               función generadora
+      }
+    )
+    
+    if (counter_train == length(train_k) && is.null(sequence)) {
+      counter_train <<- 1
+      index <- indexes_train[counter_train]
+      } else {
+        if (is.null(sequence)){
+          counter_train <<- counter_train + 1
+          index <- indexes_train[counter_train]
+        }
+      }
+    
+    counter_train <<- counter_train + 1
+    
+  }
+  
+  return(sequence) 
+  # En caso de encontrar una secuencia no nula se aumenta el contador una unidad y se devuelve la secuencia. Si la sencuencia es nula al llegar a la última generadora, se resetea el contador y se genera una secuencia con el nuevo contador en valor 1.
+}
+```
+
+
+```{r custom generator val}
+# Análoga a la anterior:
+
+indexes_val <- sample(length(val_k),
+                        replace = F,
+                        )
+
+counter_val <- 1
+
+val_gen <- function() {
+  if (counter_val > length(val_k)) {
+    counter_val <<- 1
+  } 
+  
+  index <- indexes_val[[counter_val]]
+  
+  sequence <- NULL
+  
+  while (is.null(sequence) && counter_val <= length(val_k)) {
+    sequence <- tryCatch( 
+      val_k[[index]](),
+      error = function(e) {
+        warning("Empty sequence error occurred in the generator.
+                Trying the next one.")
+        return(NULL)
+      }
+    )
+    
+    if (counter_val == length(val_k) && is.null(sequence)) {
+      counter_val <<- 1
+      index <- indexes_val[counter_val]
+      } else {
+        if (is.null(sequence)){
+          counter_val <<- counter_val + 1
+          index <- indexes_val[counter_val]
+        }
+      }
+    
+    counter_val <<- counter_val + 1
+    
+  }
+  
+  return(sequence) 
+}
+```
+
+
+```{r Test set case grouping and k length time series creation}
+# La creación de series temporales para el dataset de test tiene otro objetivo distinto al de los datasets de training y validación. Aquí interesa generar series por categorías seleccionadas de analizardor y código de prueba, para poder evaluar específicamente el comportamiento del modelo en cada caso. Por esto se crea un diccionario distinto al usado para los datasets de training y validación.
+
+# Creación de los códigos identificativos únicos de combinaciones de variables categóricas para el set de test:
+
+categorical_vars_test <- c(12:38) # Todas las técnicas, 
+                             #sin analizador ni wavelets
+#categorical_vars_test <- c(10:38) # Todas las técnicas y analizadores
+                             # sin wavelets
+# categorical_vars <- c(12:30) # Técnicas seleccionadas, 
+                              # sin analizador ni wavelets
+#categorical_vars_test <- c(28:56) # Todas las técnicas, con                                                # analizadores, con wavelets 
+#categorical_vars_test <- c(30:56) # Todas las técnicas, con                                                # analizadores, con wavelets 
+
+test_indx <- unique_lab_cases(test_code$data,
+                               categorical_vars = categorical_vars_test)
+
+# Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
+code_values_test <- unique(test_indx[,"code"])
+code_dictionary_test <- data.frame(code = code_values_test)
+code_dictionary_test %<>%  
+  mutate(., index = as.numeric(factor(code_values_test, 
+                                      levels = code_values_test)))
+
+# Sustituimos los códigos de train_indx por sus índices numéricos y ordenamos por fechas:
+test_indx$index <- code_dictionary_test$index[match(test_indx$code, code_dictionary_test$code)]
+test_indx$code <- NULL
+test_indx %<>% arrange(., test_indx$TIEMPO_MUESTRA)
+
+# Creación de lista de funciones generadoras de las series temporales de longitud k por categoría del dataset de test. Se generan series solo filtradas por las variables categóricas seleccionadas, sin tener por qué pertenecer al mísmo día de observación:
+
+test_k <- mapply(function(idx) {
+  data <- as.matrix(
+  train_indx[train_indx[,"index"] == idx,
              - c(1, length(train_indx))])
   max_index <- nrow(data)-delay
   
@@ -1529,137 +1705,21 @@ train_k <- mapply(function(idx, date) {
     max_index = max_index,
     predseries = predseries)
 },
-idx = combinations_train$index,
-date = combinations_train$date,
+idx = code_dictionary_test$index,
 SIMPLIFY = T
 ) 
 
-
 # Cálculo del número de steps de training:
-train_steps <- round((nrow(train_code$data) - lookback) / batch_size)
-
-```
-
-```{r Validation set case grouping and k length time series creation}
-# Creación de los índices identificativos de combinaciones de variables categóricas para el set de validación:
-val_indx <- unique_lab_cases(val_code$data, 
-                             categorical_vars)
-
-# Usamos el diccionario de códigos creado anteriormente: 
-val_indx$index <- code_dictionary$index[match(val_indx$code,
-                                            code_dictionary$code)]
-val_indx$code <- NULL
-val_indx %<>% arrange(., val_indx$TIEMPO_MUESTRA)
-
-# Generar todas las combinaciones de index y date para el set de validación:
-
-val_indx$TIEMPO_MUESTRA %<>% as.Date()
-
-combinations_val <- expand.grid(code = code_values,
-                            date = unique(val_indx$TIEMPO_MUESTRA))
-
-# Traducimos los códigos a índices:
-
-combinations_val$index <-
-  code_dictionary$index[match(combinations_val$code,
-                              code_dictionary$code)]
-head(val_indx)
-head(combinations_val)
-
-# Creación de lista de funciones generadoras del dataset de validación:
-
-val_k <- mapply(function(index, date) {
-  data <- as.matrix(
-  val_indx[val_indx[,"TIEMPO_MUESTRA"] == date &
-               val_indx[,"index"] == index,
-             - c(1, length(train_indx))])
-  max_index <- nrow(data)-delay
-  
-  create_lstm_data.1(
-    data = data,
-    lookback = lookback,
-    delay = delay,
-    batch_size = batch_size,
-    min_index = min_index,
-    max_index = max_index,
-    predseries = predseries)
-  },
-  index = combinations_val$index,
-  date = combinations_val$date,
-  SIMPLIFY = T
-)  
-
-# Cálculo del número de steps de validación:
-val_steps <- round((nrow(val_code$data)-lookback) / batch_size)
-```
-
-```{r Test set case grouping and k length time series creation}
-# Mismo procedimiento que para el set de validación:
-
-test_indx <- unique_lab_cases(test_code$data, 
-                             categorical_vars)
-
-test_indx$index <- code_dictionary$index[match(test_indx$code,
-                                            code_dictionary$code)]
-test_indx$code <- NULL
-
-test_indx %<>% arrange(., test_indx$TIEMPO_MUESTRA)
-
-test_indx$TIEMPO_MUESTRA %<>% as.Date()
-
-combinations_test <- expand.grid(code = code_values,
-                            date = unique(test_indx$TIEMPO_MUESTRA))
-
-# Traducimos los códigos a índices:
-
-combinations_test$index <-
-  code_dictionary$index[match(combinations_test$code,
-                              code_dictionary$code)]
-head(val_indx)
-head(combinations_val)
-
-# Creación de lista de funciones generadoras del dataset de validación:
-
-test_k <- mapply(function(index, date) {
-  data <- as.matrix(
-  test_indx[test_indx[,"TIEMPO_MUESTRA"] == date &
-               test_indx[,"index"] == index,
-             - c(1, length(test_indx))])
-  max_index <- nrow(data)-delay
-  
-  create_lstm_data.1(
-    data = data,
-    lookback = lookback,
-    delay = delay,
-    batch_size = batch_size,
-    min_index = min_index,
-    max_index = max_index,
-    predseries = predseries)
-  },
-  index = combinations_test$index,
-  date = combinations_test$date,
-  SIMPLIFY = T
-)  
-
-# Cálculo del número de steps de validación:
-test_steps <- round((nrow(test_code$data)-lookback) / batch_size)
+test_steps <- nrow(test_code$data) - lookback) / batch_size)
 ```
 
 
-# Definición del modelo de Machine Learning. Red Neuronal Recurrente LSTM (Long-short term memory).
 
-```{r model definition}
-set.seed(123)
+# Definición del modelo de Machine Learning. Red Neuronal Recurrente LSTM (Long-short term memory) y entrenamiento.
 
-nkp <- dim(train_gen()[[1]])
+## Métricas a medida:
 
-k <- nkp[2]
-p <- nkp[3]
-
-input_shape <- c(NULL, k, p)
-
- 
-```
+Se definen funciones para calcular las métricas precisión, recall y F1 score, que combina ambas, usando el backend de Keras.
 
 ```{r custom metrics functions}
 # Funciones para calcular precisión, recall y F1 como métricas para los modelos:
@@ -1717,30 +1777,95 @@ input_shape <- c(NULL, k, p)
   return(f1_score)
 }
 
+# Asignación de los nombres de las funciones como atributos py_function_name:
+  
+attr(f1_score, "py_function_name") <- "f1_score"
+attr(precision, "py_function_name") <- "precision"
+attr(recall, "py_function_name") <- "recall"
+
 ```
 
+## Configuración de la red LSTM:
+
+```{r model definition}
+set.seed(123)
+t <- train_gen()
+nkp <- dim(t[[1]])
+
+k <- nkp[2]
+p <- nkp[3]
+
+input_shape <- c(NULL, k, p)
+
+model_1 <- keras_model_sequential() %>%
+  
+  #layer_masking(mask_value = -99999, input_shape = input_shape) %>%
+  layer_lstm(units = 32,
+             dropout = 0.8,
+             recurrent_dropout = 0.6,
+             return_sequences = F,
+             kernel_regularizer = regularizer_l2(l = 0.001),
+             input_shape = c(NULL, k, p)) %>%
+  #layer_lstm(units = 16,
+   #          dropout = 0.3,
+    #         recurrent_dropout = 0.1,
+     #        return_sequences = F,
+             # kernel_regularizer = regularizer_l2(l = 0.001),
+       #      input_shape = c(NULL, k, p)) %>%
+  #layer_lstm(units = 32,
+  #           dropout = 0.3,
+  #           recurrent_dropout = 0,
+  #           # kernel_regularizer = regularizer_l2(l = 0.001),
+  #           return_sequences = F) %>%  
+  layer_dense(units = 1, 
+             # kernel_regularizer = regularizer_l2(l = 0.01),
+             activation = "sigmoid")
+
+summary(model_1)
+ 
+```
+
+## Compilación del modelo
+
 ```{r model compilation and callbacks}
+
 model_1 %<>% compile(
-  optimizer = "adam",
-  loss = "binary_crossentropy",
+  optimizer = optimizer_adam(learning_rate = 0.0001),
+  #loss = "binary_crossentropy",
+  loss = loss_sigmoid_focal_crossentropy(
+    reduction = tf$keras$losses$Reduction$AUTO),
   metrics = list("binary_accuracy",
+                 precision,
+                 recall,
                  f1_score)
   )
    
 callbacks <- list(
+  callback_tensorboard(log_dir=file.path(resultsdir, "run_a"),
+                       write_grads = T,
+                       histogram_freq = 1,
+                       update_freq = "batch",
+                       write_images = T),
   callback_model_checkpoint(file.path(resultsdir, "lstm_1.keras",
+                           monitor= "f1_score", mode="max",verbose=1,
                                      save_best_only = TRUE)),
-  callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.5,
-                                patience = 20, min_lr = 0.00001),
-  callback_early_stopping(monitor = "val_loss", patience = 50,
-                          verbose = 1),
-  callback_tensorboard(log_dir = resultsdir,  histogram_freq = 1,
-                      write_graph = TRUE)
+  callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
+                                patience = 3, min_lr = 0.000001),
+  callback_early_stopping(monitor = "val_loss", patience = 10,
+                          verbose = 1)
   )
+
+
 ```
 
+## Entrenamiento del modelo:
 
 ```{r model fit, eval=FALSE}
+
+tensorboard(file.path(resultsdir, "run_a"), port=8088)
+
+# tensorboard dev upload --logdir ./
+
 history_1 <- model_1 %>% fit_generator(
   generator = train_gen,
   steps_per_epoch = train_steps,
@@ -1751,32 +1876,42 @@ history_1 <- model_1 %>% fit_generator(
 )
 
 
-plot(history_1)
+valplot(history_1)
 ```
 
-# Evaluación
+# Evaluación del modelo LSTM
+
+## Carga del modelo:
+
+Se definen distintas rutas para cargar el modelo en función de si se ha entrenado en RStudio o en Google Colab.
 
 ```{r, eval=FALSE}
 set.seed(123)
 
 # Evaluación del modelo:
-path <- file.path(resultsdir, "lstm_1.keras/TRUE")
-#path <- file.path(resultsdir, "GC_lstm_1.keras/TRUE")
+path <- file.path(resultsdir, "lstm_1.keras")
+#path <- file.path(resultsdir, "GC_lstm_15.keras")
 
-model <- load_model_hdf5(path, 
-                         custom_objects = list('f1_score' =
-                                                 f1_score),
-                         compile = F) 
+model <- load_model_tf(path, 
+                         custom_objects = 
+                           list("precision" = precision,
+                                "recall" = recall, 
+                                "f1_score" = f1_score),
+                                 compile = T) 
 model %<>% compile(
   optimizer = "adam",
-  loss = "binary_crossentropy",
+  #loss = "binary_crossentropy",
+  loss = loss_sigmoid_focal_crossentropy(reduction = tf$keras$losses$Reduction$AUTO),
   metrics = list("binary_accuracy",
+                 precision,
+                 recall,
                  f1_score)
   )
 
+# Cálculo de la evlaución del modelo a partir de la función generadora de datasets de test:
 evaluation_result <- evaluate(model, test_gen, steps = test_steps)
 
-# Obtener el nombre de las métricas
+# Obtención el nombre de las métricas:
 metric_names <- names(evaluation_result)
 
 # Crear un vector para almacenar los resultados
@@ -1806,8 +1941,11 @@ evaluate_naive_method <- function(data_df, ctrl_colname) {
   predicted_ctrl <- rep(ctrl_mode, length(actual_ctrl))
   accuracy <- sum(actual_ctrl == predicted_ctrl) /
     length(actual_ctrl)
+  
+  # Cálculo de F1:
+  f1 <- f1Score(actual_ctrl, predicted_ctrl)
 
-  print(accuracy)
+  cat("accuracy =", accuracy, "F1score =", f1)
 }
 
 # Cálculo de accuracy basado en predecir con la moda:
@@ -1825,7 +1963,7 @@ names(evaluation_results[3]) <- "f1_score"
 
 # Imprimir los resultados de evaluación:
 
-sink(file.path(resultsdir, "modelgc_1_LSTM_onehot_samples.txt"))
+sink(file.path(resultsdir, "GC_LSTM_onehot_samples_16.txt"))
 
 for (i in 1:length(metric_names)) {
   metric <- metric_names[i]
@@ -1847,13 +1985,15 @@ sink()
 ```{r model evaluation per category}
 # Función para seleccionar los índices en test_indx que corresponden a una combinación determinada de CODIGO_PRUEBA, Y ANALIZADOR. Usa el argumento n según la estructura de datos en función de si hay wavelets o no:
 
-n <- 11 # Sin wavelets ni analizador
+n <- 9 # Sin wavelets
 
 index_select <- function(n) {
   
   # Opciones para elegir CLC y ANALIZADOR:
   clc_opt <- test_code$levels$CODIGO_PRUEBA
-  #anal_opt <- test_code$levels$ANALIZADOR
+  names_opt <- iqtests$data.NOMBRE_PRUEBA.x[
+    iqtests$data.CODIGO_PRUEBA %in% clc_opt]
+  anal_opt <- test_code$levels$ANALIZADOR
   
   # Introducción de la fecha por el usuario:
   #date <- readline(
@@ -1861,16 +2001,20 @@ index_select <- function(n) {
   #if(!date %in% as.Date(test_code$data$TIEMPO_QC))
    #  print("fecha no incluida en dataset")
   
-  # Introducción de prueba, nivel y analizador:
-  clc <- clc_opt[menu(clc_opt, 
-                      title = "Código CLC de prueba: ",
+  # Introducción de prueba y analizador:
+  test_name <- names_opt[menu(names_opt, 
+                      title = "Nombre de la prueba: ",
                       graphics = T)]
+  
+  clc <- iqtests$data.CODIGO_PRUEBA[
+    iqtests$data.NOMBRE_PRUEBA.x==test_name]
+  
   #anal <- anal_opt[menu(anal_opt, 
-  #                      title = "Analizador: ",
-  #                      graphics = T)]
+   #                     title = "Analizador: ",
+    #                    graphics = T)]
     
-  cat("Indice correspondiente a la prueba: ", clc, "\n", 
-  "analizador: ")#, anal, "\n")
+  cat("Indice correspondiente a la prueba: ", clc, test_name, "\n")
+  #,"analizador: ", anal, "\n")
   
   # Conversión de las variables introducidas en índice:
   
@@ -1878,24 +2022,24 @@ index_select <- function(n) {
   #col_anal <- which(grepl(anal, names(test_indx)))-n
   pos <- list(col_clc)#, col_anal)
   
-  code <- rep(0, length(categorical_vars+2))
+  code <- rep(0, length(categorical_vars_test))
   
   for (i in seq_along(pos)) {
     code[pos[[i]]] <- 1 
   }
   code <- paste0(as.character(code), collapse = "")
   
-  index <- code_dictionary$index[match(code,
-                                       code_dictionary$code)]
+  index <- code_dictionary_test$index[match(code,
+                                       code_dictionary_test$code)]
   print(index)
-  return(index)
+  return(list(index, test_name, clc))#, anal))
   
 }
 
 index_pred <- index_select(n)
 
-  test_pred <- lapply(index_pred, function(idx) {
-    create_lstm_data.2(
+  test_pred <- lapply(index_pred[[1]], function(idx) {
+    create_lstm_data.1(
       data = as.matrix(test_indx[test_indx[,"index"] == idx,
                                  -c(1, length(test_indx))]),
       lookback = lookback,
@@ -1914,36 +2058,64 @@ index_pred <- index_select(n)
 ```{r model prediction and metrics}
 
 # Obtener las series y sus predicciones utilizando la función generadora de tests por categorías y obtener la predicción del modelo:
+
+
 x <- test_pred[[1]]()[[1]]
 y_pred <- predict(model, x, probability = T)
 y_true <- test_pred[[1]]()[[2]]
 
-perf <- performance(y_pred, "tpr","fpr")
-
-roc(as.vector(y_true), as.vector(y_pred), plot = TRUE, 
-    legacy.axes = TRUE,
-    percent = TRUE, xlab = "Porcentaje Falsos positivos",
-    ylab = "Porcentaje verdaderos postivios", col = "#377eb8", lwd = 2,
-    print.auc = TRUE)
-
-metrics <- list(
-  MSE <- mse(actual = y_true, predicted = y_pred),
-  MAE <- mae(actual = y_true, predicted = y_pred),
-  Correlación <- cor(y_pred, y_true)
-)
-names(metrics) <- c("MSE", "MAE", "Coef. correlación")
-metrics
-
 # Crear el gráfico de dispersión entre y_pred e y_true
 plot(y_true, y_pred, pch = 16, col = "blue", xlab = "y_true", ylab = "y_pred", 
-     main = "Gráfico de dispersión: y_true vs. y_pred")
+     main = cat("Gráfico de dispersión: y_true vs. y_pred",
+                index_pred[[2]]))
 
-# Calcular el coeficiente de correlación
-correlacion <- cor(y_true, y_pred)
+# Gráficos de evaluación del modelo de clasificación binaria: 
+preds <- prediction(as.vector(y_pred), as.vector(y_true))
+perf <- performance(preds, "sens", "f")
+plot(perf,
+     colorize=TRUE,
+     main = cat("Sensivility vs F1 score", index_pred[[2]]))
+abline(a=1, b= 0)
 
-# Agregar el coeficiente de correlación al gráfico
-texto_cor <- paste("Correlación:", round(correlacion, 2))
-mtext(texto_cor, side = 3, line = -2.5)
+perf <- performance(preds, "tpr", "fpr")
+plot(perf,
+     avg="threshold",
+     spread.estimate="boxplot",
+     main = cat("Average TPR vs FNR", index_pred[[2]]))
+
+perf <- performance(preds, "prec", "rec")
+plot(perf,
+     avg= "threshold",
+     colorize=TRUE,
+     lwd= 3,
+     main= cat("Precision vs Recall", index_pred[[2]]))
+plot(perf,
+     lty=3,
+     col="grey78",
+     add=TRUE)
+perf <- performance(preds, "sens", "spec")
+plot(perf,
+     avg= "threshold",
+     colorize=TRUE,
+     lwd= 3,
+     main= cat("Sensitivity vs Specificity", index_pred[[2]]))
+plot(perf,
+     lty=3,
+     col="grey78",
+     add=TRUE)
+perf <- performance(preds, "tpr", "fpr")
+plot(perf,
+     avg= "threshold",
+     colorize=TRUE,
+     lwd= 3,
+     main= cat("ROC curve", index_pred[[2]]))
+plot(perf,
+     lty=3,
+     col="grey78",
+     add=TRUE)
+
+
+
 
 
 ```
@@ -1989,9 +2161,9 @@ for (i in 1:3) {
 ```{r index search}
 # Función para hacer la búsqueda inversa de analizador, prueba y nivel a partir de un index:
 
-reverse_index_select <- function(index) {
+reverse_index_select <- function(index, n) {
   # Buscar el código correspondiente al índice
-  code <- code_dictionary$code[match(index, code_dictionary$index)]
+  code <- code_dictionary_test$code[match(index, code_dictionary_test$index)]
   
   # Extraer los dígitos de code
   digits <- strsplit(code, "")[[1]]
@@ -2001,8 +2173,8 @@ reverse_index_select <- function(index) {
   pos_clc <- which(digits == "1")[2]
   
   # Obtener los valores de anal, clc y level
-  anal <- names(test_indx)[16 + pos_anal]
-  clc <- names(test_indx)[16 + pos_clc]
+  anal <- names(test_indx)[n + pos_anal]
+  clc <- names(test_indx)[n + pos_clc]
   
   # Devolver los valores encontrados
   result <- list(CÓDIGO_PRUEBA = substr(clc, 15, 22),
