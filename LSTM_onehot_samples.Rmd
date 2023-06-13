@@ -700,7 +700,7 @@ create_lstm_data.1 <-
       rows <- sample(c((min_index+lookback):max_index), 
                      size = batch_size)
     } else {
-      if (i + batch_size > max_index)
+      if (i + batch_size >= max_index)
         i <<- min_index + lookback
       rows <- c(i:min(i+batch_size-1, max_index))
       i <<- i + length(rows)
@@ -1152,7 +1152,7 @@ Se emplea la función ```sub_sample``` diseñada para eliminar la proporción de
 ```{r}
 set.seed(123)
 
-train_ss <- train_n$scaled_data %>% sub_sample(prop=0.1)
+train_ss <- train_n$scaled_data %>% sub_sample(prop=0.5)
 
 table(train_ss$NOMBRE_PRUEBA.x, train_ss$CTRL)
 
@@ -1267,7 +1267,10 @@ train_k <-  create_lstm_data.1(
     min_index = min_index,
     max_index = nrow(train_data) - delay -1,
     predseries = predseries)
+```
 
+
+```{r}
 train_k <- create_lstm_data.3(
     data = train_data,
     lookback = lookback,
@@ -1277,8 +1280,10 @@ train_k <- create_lstm_data.3(
     max_index = max_index,
     predseries = predseries, 
     wl = wl)
+```
 
 
+```{r}
 # Cálculo del número de steps de training:
 train_steps <- round((nrow(train_data)-lookback) / batch_size) 
 ```
@@ -1296,7 +1301,10 @@ val_k <-  create_lstm_data.1(
     min_index = min_index,
     max_index = nrow(val_data) - delay -1,
     predseries = ncol(val_data))
+```
 
+
+```{r}
 val_k <- create_lstm_data.3(
     data = val_data,
     lookback = lookback,
@@ -1306,7 +1314,10 @@ val_k <- create_lstm_data.3(
     max_index = max_index,
     predseries = predseries, 
     wl = wl)
+```
 
+
+```{r}
 # Cálculo del número de steps de training:
 val_steps <- round((nrow(val_data)-lookback) / batch_size) 
 ```
@@ -1322,7 +1333,7 @@ test_k <-  create_lstm_data.1(
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
-    max_index = max_index,
+    max_index = nrow(test_data),
     predseries = predseries)
 
 
@@ -1426,7 +1437,7 @@ model_1 <- keras_model_sequential() %>%
             dropout = 0.2,
              recurrent_dropout = 0.8,
              return_sequences = T,
-             kernel_regularizer = regularizer_l2(l = 0.0001),
+             kernel_regularizer = regularizer_l2(l = 0.00001),
              input_shape = c(NULL, k, p)
              ) %>%
   #layer_lstm(units = 8,
@@ -1449,7 +1460,7 @@ model_1 <- keras_model_sequential() %>%
              recurrent_dropout = 0.8,
              return_sequences = T,
              #stateful = T,
-             kernel_regularizer = regularizer_l2(l = 0.0001),
+             kernel_regularizer = regularizer_l2(l = 0.00001),
              #batch_size = 1,
              #input_shape = c(NULL, k, p)
              ) %>%
@@ -1466,7 +1477,7 @@ model_1 <- keras_model_sequential() %>%
                 padding = "same",
                 activation = "relu"
                 ) %>%
-  layer_max_pooling_1d(pool_size = 2) %>%
+  layer_max_pooling_1d(pool_size = 3) %>%
   
   #layer_dense(units = 4,
   #            activation = "relu")%>%
@@ -1482,9 +1493,9 @@ summary(model_1)
 ```{r model compilation and callbacks}
 
 model_1 %<>% compile(
-  optimizer = optimizer_adam(learning_rate = 0.0001),
+  optimizer = optimizer_adam(learning_rate = 0.00001),
   #loss = "binary_crossentropy",
-  loss = loss_sigmoid_focal_crossentropy(alpha = 0.25, 
+  loss = loss_sigmoid_focal_crossentropy(alpha = 0.8, 
                                          gamma = 4,
   reduction = tf$keras$losses$Reduction$AUTO),
   metrics = list("binary_accuracy",
@@ -1504,7 +1515,7 @@ callbacks <- list(
                            monitor= "f1_score", mode="max",verbose=1,
                                      save_best_only = TRUE)),
   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
-                                patience = 5, min_lr = 0.000001),
+                                patience = 3, min_lr = 0.000001),
   callback_early_stopping(monitor = "val_loss", patience = 20,
                           verbose = 1)
   )
