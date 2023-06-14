@@ -548,16 +548,16 @@ create_lstm_data.2 <-
            shuffle = FALSE, batch_size, step = 1,
            predseries) {
   
-  if (is.null(max_index)) max_index <- nrow(data) - delay - 1
-  i <- min_index + lookback
+  if (is.null(max_index)) max_index <- nrow(data)
+  i <- min_index + lookback - 1
   function() {
     if (shuffle) {
       rows <- sample(c((min_index+lookback):max_index), 
                      size = batch_size)
     } else {
-      if (i + batch_size >= max_index)
+      if (i + batch_size > max_index)
         i <<- min_index + lookback
-      rows <- c(i:min(i+batch_size, max_index))
+      rows <- c(i:min(i+batch_size-1, max_index))
       i <<- i + length(rows)
 }
     samples <- array(0, dim = c(length(rows),
@@ -576,96 +576,7 @@ create_lstm_data.2 <-
 
 ```
 
-## Funciones ```train_gen```, ```val_gen``` y ```test_gen```.
 
-Funciones generadoras globales de series para train, validation y testing, Estas funciones generan de manera indefinida series con los datos de entrenamiento, validación y comprobación, usando de manera consecutiva las funciones generadoras individuales almacenadas junto a los subconjuntos de datos con las posibles combinaciones de variables categóricas. Si se llega a la generación última se repite el proceso desde la primera. Incluyen un TryCatch para evitar la parada del modelo si se encuentran secuencias de datos vacías.  
-
-### Secuenciales:
-
-```{r custom generator}
-index_train <- 1
-
-train_gen_seq <- function() {
-  if (index_train > length(train_k)) {
-    index_train <<- 1
-  }
-  
-  sequence <- NULL
-  counter <- 0
-  
-  while (is.null(sequence) && counter < length(train_k)) {
-    sequence <- tryCatch(
-      train_k[[index_train]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la función generadora
-      }
-    )
-    
-    index_train <<- index_train + 1
-    counter <<- counter + 1
-  }
-  
-  return(sequence)
-}
-
-
-index_val <- 1
-
-val_gen_seq <- function() {
-  if (index_val > length(val_k)) {
-    index_val <<- 1
-  }
-  
-  sequence <- NULL
-  counter <- 0
-  
-  while (is.null(sequence) && counter < length(val_k)) {
-    sequence <- tryCatch(
-      val_k[[index_val]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la                               función generadora
-      }
-    )
-    
-    index_val <<- index_val + 1
-    counter <<- counter + 1
-  }
-  
-  return(sequence)
-}
-
-index_test <- 1
-
-test_gen_seq <- function() {
-  if (index_test > length(test_k)) {
-    test_val <<- 1
-  }
-  
-  sequence <- NULL
-  counter <- 0
-  
-  while (is.null(sequence) && counter < length(test_k)) {
-    sequence <- tryCatch(
-      test_k[[index_test]](),
-      error = function(e) {
-        warning("Empty sequence error occurred in the generator.
-                Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la                               función generadora
-      }
-    )
-    
-    index_test <<- index_test + 1
-    counter <<- counter + 1
-  }
-  
-  return(sequence)
-}
-
-```
 
 ### Aleatorizadas:
 
@@ -745,6 +656,8 @@ test_gen <- function() {
 
   #Leer los archivos de eventos de QC y crear el data frame events:
   events <- read_event()
+  events %<>% unique()
+
 
   
   #Leer los archivos de resultados de QC y crear el data frame qc_results. Se eliminan las entradas con valores NA en TIEMPO_QC:
@@ -760,9 +673,38 @@ test_gen <- function() {
   
 ```
 
+## Creación de un diccionario de correspondencia entre códigos y nombres de pruebas. Eliminación de nombres de prueba con caracteres especiales
+
+```{r inmunochemical tests names}
+
+# Pruebas incluídas en los datos:
+  iqtests <- unique(data.frame(events$NOMBRE_PRUEBA,
+                               events$CODIGO_PRUEBA))
+  
+  # Corrección de caracteres incorrectos en NOMBRE_PRUEBA:
+  iqtests$events.NOMBRE_PRUEBA <- 
+    iconv(iqtests$events.NOMBRE_PRUEBA, to = "UTF-8")
+  iqtests <- iqtests[complete.cases(iqtests),]
+  names(iqtests) <- c("NOMBRE_PRUEBA", "CODIGO_PRUEBA")
+
+  # Sustitución en data de los nombres de prueba incorrectos:
+  events$NOMBRE_PRUEBA <-
+    iqtests$NOMBRE_PRUEBA[match(events$CODIGO_PRUEBA,
+                                iqtests$CODIGO_PRUEBA)]
+  
+  length(which(is.na(iqtests$NOMBRE_PRUEBA)))
+
+```
+
 ```{r merge dataframe}
 # Unir los dos dataframes qc_results y events en uno solo.
 qc_event <- merge_qc_events(qc_results, events) 
+
+# Completar nombres de pruebas ausentes:
+qc_event$NOMBRE_PRUEBA <-
+    iqtests$NOMBRE_PRUEBA[match(qc_event$CODIGO_PRUEBA,
+                                iqtests$CODIGO_PRUEBA)]
+length(which(is.na(qc_event$NOMBRE_PRUEBA)))
 
 head(qc_event)
 
@@ -772,9 +714,11 @@ head(qc_event)
 ```{r features selection and wavelet transformation}
 # Selección de características de interés y recodificación de variables:
 
-qc_data_sel <- subset(qc_results,
+qc_data_sel <- qc_event %>% subset(.,
                       select = c(TIEMPO_QC, QC_RESULT, ANALIZADOR,
-                                 CODIGO_PRUEBA, NIVEL))
+                                 CODIGO_PRUEBA, NOMBRE_PRUEBA, NIVEL))%>%
+  unique(.)
+  
 ```
 
 
@@ -794,6 +738,18 @@ write.csv(qc_data_sel_wl, row.names = F,
 
 ```
 
+## Carga de datos desde archivo csv.
+
+```{r data_sel_tr read csv, eval=FALSE}
+
+qc_data_sel_wl <- read.csv(file.path(resultsdir, "qc_data_sel_wl"),
+                        sep = ",")
+
+# Convertir fechas en formato POSIXct:
+qc_data_sel_wl[,1] %<>% as.POSIXct(tz = "Europe/Madrid")
+```
+
+
 ## Modelo ARMA aplicado a los datos temporales.
 
 ```{r autocorrelation, partial autocorrelation an ARMA}
@@ -806,11 +762,11 @@ par(mfrow = c(2, 3))
   
 # Generar los gráficos
   qc_data_sel_wl %>%
-  group_by(CODIGO_PRUEBA, NIVEL) %>%
+  group_by(NOMBRE_PRUEBA, NIVEL) %>%
   nest() %>%
   mutate(acf_plots = map(data, ~ {
     acf(.x$QC_RESULT, type = "correlation", main="")
-    title(main = paste0("CLC:", unique(CODIGO_PRUEBA)),
+    title(main = unique(NOMBRE_PRUEBA),
           sub = paste0("NIVEL:", unique(NIVEL)),
           outer = F)
   })) %>%
@@ -852,35 +808,38 @@ train_n <- qc_data_sel_wl %>%
 
 ```{r validation dataset subsetting and normalization}
 # Muestra de validación:
-val_n <- qc_data_sel_wl %>%
+val <- qc_data_sel_wl %>%
   subset(
     .[[1]] > time_point_50 &
-    .[[1]] <= time_point_75) %>%
+    .[[1]] <= time_point_75)
+
   # Normalización del dataset y eliminación de coeficientes
   # wavelet con valor NA:
-  norm_test_val(means = train$means, stds = train$stdev)
+  val_n <- val %>% norm_test_val(means = train_n$means, stds = train_n$stdev)
 ```
 
 
 ```{r test dataset subsetting and normalization}
 # Muestra de test:
-test_n <- qc_data_sel_wl %>%
-  subset(.[[1]] > time_point_75) %>%
+test <- qc_data_sel_wl %>%
+  subset(.[[1]] > time_point_75)
   # Normalización del dataset y eliminación de coeficientes
   # wavelet con valor NA:
-  norm_test_val(means = train$means, stds = train$stdev)
+test_n <- test %>% norm_test_val(means = train_n$means, stds = train_n$stdev)
 ```
 
 ## Codificación one-hot.
 
+### Sin wavelets
 ```{r training validation and test dataset onehot coding}
 # Codificación onehot 
 
-train_code <- code_cat_var(train_n$scaled_data) 
+train_code <- code_cat_var(
+  train_n$scaled_data[,-c(3:16, 19)]) 
 
-val_code <- code_cat_var(val_n)
+val_code <- code_cat_var(val_n[,-c(3:16, 19)])
 
-test_code <- code_cat_var(test_n)
+test_code <- code_cat_var(test_n[,-c(3:16, 19)])
 
 ```
 
@@ -937,6 +896,7 @@ train_k <- lapply(index_values, function(idx) {
 train_steps <- round((nrow(train_code$data)-lookback) / batch_size)
 
 ```
+
 
 ```{r Validation set case grouping and k length time series creation}
 
@@ -998,12 +958,68 @@ test_k <- lapply(index_values, function(idx) {
 test_steps <- round((nrow(test_code$data)-lookback) / batch_size)
 ```
 
-## Definición del modelo LSTM.
+## Uso de generadoras directas:
+
+```{r}
+train_data <- as.matrix(train_code$data[,-1])
+lookback <- 20
+batch_size <- 100
+delay <- 1
+min_index <- 1
+predseries <- 1
+
+train_k <-  create_lstm_data.2(
+    data = train_data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = nrow(train_data),
+    predseries = predseries)
+
+# Cálculo del número de steps de training:
+train_steps <- round((nrow(train_data)-lookback) / batch_size) 
+```
+
+```{r}
+val_data <- as.matrix(val_code$data[,-1])
+
+val_k <- create_lstm_data.2(
+    data = val_data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = nrow(val_data),
+    predseries = predseries)
+
+# Cálculo del número de steps de training:
+val_steps <- round((nrow(val_data)-lookback) / batch_size) 
+```
+
+```{r}
+test_data <- as.matrix(test_code$data[,-1])
+
+test_k <-  create_lstm_data.2(
+    data = test_data,
+    lookback = lookback,
+    delay = delay,
+    batch_size = batch_size,
+    min_index = min_index,
+    max_index = nrow(test_data),
+    predseries = predseries)
+
+
+# Cálculo del número de steps de training:
+test_steps <- round((nrow(test_data)-lookback) / batch_size) 
+```
+
+# Definición del modelo LSTM.
 
 ```{r model definition, eval=FALSE}
 set.seed(123)
 
-nkp <- dim(train_gen()[[1]])
+nkp <- dim(train_k()[[1]])
 
 k <- nkp[2]
 p <- nkp[3]
@@ -1011,58 +1027,78 @@ p <- nkp[3]
 input_shape <- c(NA, k, p)
 
 model_2 <- keras_model_sequential() %>%
-   layer_masking(mask_value = -99999, input_shape = c(NULL, k, p)) %>%
-   layer_lstm(units = 64, 
-              dropout=0.8, 
-              recurrent_dropout=0.1,
-              kernel_regularizer = regularizer_l2(l=0.01),
-              return_sequences = TRUE,
+   #layer_masking(mask_value = -99999, input_shape = c(NULL, k, p)) %>%
+   layer_lstm(units = 8, 
+              #dropout=0.8, 
+            #  recurrent_dropout=0.1,
+              #kernel_regularizer = regularizer_l2(l=0.01),
+              return_sequences = F,
               input_shape = c(NULL, k, p)) %>%
-    layer_lstm(units = 64, 
-               dropout=0.8, 
-               recurrent_dropout=0.5) %>%
-    layer_dense(units = 1)
+    #layer_lstm(units = 64, 
+     #          dropout=0.8, 
+      #         recurrent_dropout=0.5) %>%
+    layer_dense(units = 1,
+                activation = "sigmoid")
 
 ```
 
 ## Compilación.
 
 ```{r custom rmse metrics function}
+K <- keras::backend()
 
 rmse <- function(y_pred, y_true) {
-  backend <- keras::backend()
-  sq_diff <- backend$square(y_pred - y_true)
-  mean_sq_diff <- backend$mean(sq_diff, axis = -1)
-  rmse_value <- backend$sqrt(mean_sq_diff)
-  rmse_value <- backend$cast(rmse_value, dtype = "float32")
+  sq_diff <- K$square(y_pred - y_true)
+  mean_sq_diff <- K$mean(sq_diff)
+  rmse_value <- K$sqrt(mean_sq_diff)
   return(rmse_value)
 }
+
+attr(rmse, "py_function_name") <- "rmse"
 ```
 
 
 ```{r model compilation and callbacks}
-model_2 %>% compile(
+model_0 %<>% compile(
     optimizer = "adam",
     loss="mse", 
     metrics = list("mae",
-                   "mse"
-                   #rmse
+                   "mse",
+                   rmse
                    )
 )
 
 callbacks <- list(
-  callback_model_checkpoint(file.path(resultsdir, "lstm_2.keras",
-                                     save_best_only = TRUE)))
+  callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
+                      # write_grads = T,
+                      # histogram_freq = 1,
+                      # update_freq = "batch",
+                      # write_images = T
+                      ),
+  callback_model_checkpoint(file.path(resultsdir, 
+                                      paste0("lstm_2_",
+                                             format(Sys.time(),
+                                                    "%Y%m%d_%H%M%S"),
+                                             ".keras")),
+                            monitor= "rmse",
+                            mode="min",
+                            verbose=1,
+                            save_best_only = TRUE),
+  callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
+                                patience = 10, min_lr = 0.000001),
+  callback_early_stopping(monitor = "val_loss", patience = 20,
+                          verbose = 1)
+  )
 ```
 
 ## Entrenamiento.
 
 ```{r model fit}
-history_2 <- model_2 %>% fit_generator(
-  generator = train_gen,
+history_0 <- model_0 %>% fit_generator(
+  generator = train_k,
   steps_per_epoch = train_steps,
-  epochs = 15,
-  validation_data = val_gen,
+  epochs = 10,
+  validation_data = val_k,
   validation_steps = val_steps,
   callbacks = callbacks
 )
@@ -1071,26 +1107,19 @@ history_2 <- model_2 %>% fit_generator(
 plot(history_2)
 ```
 
-## Evaluación
+# Evaluación
 
 ```{r, eval=FALSE}
 set.seed(123)
 # Evaluación del modelo:
 path <- file.path(resultsdir, "lstm_2.keras/TRUE")
-model <- load_model_hdf5(path) 
-evaluation_result <- evaluate(model, test_gen, steps = test_steps)
+model <- load_model_hdf5(path, 
+                         custom_objects = list("rmse" =
+                                                 rmse),
+                         compile = T) 
+evaluation_result <- evaluate(model, test_k, steps = test_steps)
 
-# Obtener el nombre de las métricas
-metric_names <- names(evaluation_result)
-
-# Crear un vector para almacenar los resultados
-evaluation_results <- length(metric_names)
-
-# Almacenar los resultados en el vector
-for (i in 1:length(metric_names)) {
-  evaluation_results[i] <- evaluation_result[[i]]
-}
-
+evaluation_result
 ```
 
 ### Línea base de sentido común
@@ -1101,40 +1130,35 @@ for (i in 1:length(metric_names)) {
 evaluate_naive_method <- function() {
   batch_mae <- c()
   batch_mse <- c()
+  batch_rmse <- c()
   for (step in 1:val_steps) {
-    c(samples, targets) %<-% val_gen()
+    c(samples, targets) %<-% val_k()
     preds <- samples[,dim(samples)[[2]],2]
     mae <- mean(abs(preds - targets))
     mse <- mean((preds - targets)^2)
+    rmse <- sqrt(mse)
     batch_mae <- c(batch_mae, mae)
     batch_mse <- c(batch_mse, mse)
+    batch_rmse <- c(batch_rmse, rmse)
   }
   naive_mse <- mean(batch_mse)
   naive_mae <- mean(batch_mae) 
+  naive_rmse <- mean(batch_rmse) 
   cat("naive_mae", mae, "\n", 
-      "naive_mse", mse, "\n")
-  naive <- list(naive_mae, naive_mse)
-  names(naive) <- c("mae", "mse")
+      "naive_mse", mse, "\n", 
+      "naive_rmse", rmse)
+  naive <- list(naive_mae, naive_mse, naive_rmse)
+  names(naive) <- c("mae", "mse", "rmse")
   return(naive)
   
 }
 
-# Comparación con rendimiento obtenido:
 
-mae <- evaluation_results[2]
-mse <- evaluation_results[3]
-
-# Imprimir los resultados de evaluación:
-
-sink(file.path(resultsdir, "model_2.txt"))
-
+# mae y mse del modelo naive:
 naive <- evaluate_naive_method()
 
-for (i in 1:length(metric_names)) {
-  metric <- metric_names[i]
-  value <- evaluation_results[i]
-  cat(sprintf("%s: %f\n", metric, value))
-}
+# mae del modelo LSTM: 
+mae <- evaluation_result[2]
 
 eval_model <- cbind(train_n$stdev[[2]], train_n$stdev[[1]],
                     train_n$stdev[[3]], 
@@ -1143,12 +1167,131 @@ eval_model <- cbind(train_n$stdev[[2]], train_n$stdev[[1]],
 
 colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR",
                           "SD","NAIVE_MAE*SD","MAE*SD")
+
+# Imprimir los resultados de evaluación:
+
+sink(file.path(resultsdir, "model_2.txt"))
+
+naive
+evaluation_result
 eval_model
 
 # Cerrar el archivo de salida
 sink()
 
 ```
+
+# Validación cruzada Day Forward Chain
+
+Consiste en considerar cada unidad de tiempo del dataset como un punto para dividirlo, de manera que todos los puntos previos forman una cadena consecutiva de puntos que se usa como set de entrenamiento. Los puntos posteriores a ese set se utilizan como conjunto de test. A su vez, el set de entrenamiento se divide en un subset de entrenamiento y otro de validación y se entrena con ellos. En una nueva iteración se aumentará el tamaño de la cadena, repitiendo el proceso. Para simplificar la elección de los puntos donde se inicia la cadena, se usarán percentiles de la serite temporal en días, y se crearán funciones generadoras que tomarán min y max_index de manera acorde, realizando los entrenamientos todo en una sola función.
+
+## Creación de funciones generadoras para el Day Forward Chain
+Cada función tendrá asignado un rango temporal de datos según un esquema incremental en el una vez dividido el espacio muestral en percentiles, se asignan los primeros al dataset de training y el último al de validación, incrementándose el dataset de training en cada ciclo, y manteniéndose el tamaño del de validación.
+```{r}
+# Muestra de validación:
+forward_chain_cv <- function(s){
+  # quantiles dependientes del número de divisiones que se pase (s):
+  q <- seq(1/s, 1, 1/s)
+  
+  # Cálculo de las fechas correspondientes a cada cuantil
+  time_points <- 
+    do.call(quantile,
+            list(as.POSIXct(as.Date(qc_data_sel_wl[[1]])), q))
+  
+  # Listas para conener las funciones generadoras
+  train_ks <- list()
+  val_ks <- list()
+  
+  # Loop a lo largo de los percentiles de tiempo:
+  for(i in 1:(length(time_points)-1)){
+  
+  # Workflow aplicado a cada forward chain:
+    
+    train_n <- qc_data_sel_wl %>%
+      subset(.[[1]] < time_points[i]) %>%
+      normalize_train(.)
+    
+    val_n <- qc_data_sel_wl %>% 
+      subset(.[[1]] > time_points[i] & .[[1]] <= time_points[i+1]) %>%
+      norm_test_val(., means = train_n$means, stds = train_n$stdev)
+    ###################################################################
+    train_code <- code_cat_var(train_n$scaled_data[,-c(3:16, 19)])
+    val_code <- code_cat_var(val_n[,-c(3:16, 19)])
+    ###################################################################
+    
+    # Crear una lista de funciones generadoras para cada cadena:
+    
+    train_k <- create_lstm_data.2(
+        data = as.matrix(train_code$data[,-1]),
+        lookback = lookback,
+        delay = delay,
+        batch_size = batch_size,
+        min_index = 1,
+        max_index = nrow(train_code$data),
+        predseries = predseries)
+    
+    val_k <- create_lstm_data.2(
+        data = as.matrix(val_code$data[,-1]),
+        lookback = lookback,
+        delay = delay,
+        batch_size = batch_size,
+        min_index = 1,
+        max_index = nrow(val_code$data),
+        predseries = predseries)
+    
+    train_ks[[i]] <- train_k
+    val_ks[[i]] <- val_k
+  
+    train_ks %>% setNames(paste0("train_", i, sep = "")) 
+  }
+  chain <- list(train_ks, val_ks)
+  names(chain) <- c("train", "val")
+
+  return(chain)
+
+}
+  
+  
+chain <- forward_chain_cv(4)
+
+```
+## Entrenamiento y validación con las funciones generadoras Day Forward Chain:
+
+
+```{r}
+
+train_model_multiple <- function(model, chain, train_steps, val_steps,
+                                 epochs, callbacks) {
+  
+  history <- list()  # Lista para almacenar los historiales de entrenamiento
+  
+  for (i in seq_along(chain)) {
+    train_k <- chain$train[[i]]  # Obtener train_k desde chain
+    val_k <- chain$val[[i]]  # Obtener val_k desde chain
+    
+    history[[i]] <- model %>% fit_generator(
+      generator = train_k,
+      steps_per_epoch = train_steps,
+      epochs = epochs,
+      validation_data = val_k,
+      validation_steps = val_steps,
+      callbacks = callbacks
+    )
+  }
+  
+  return(history)
+}
+
+
+cross_val_history <- train_model_multiple(model_0,
+                                          chain = chain,
+                                          train_steps = train_steps,
+                                          val_steps = val_steps,
+                                          epochs = 10,
+                                          callbacks = callbacks)
+```
+
+
 
 ### Evaluación por categorías.
 
@@ -1360,4 +1503,6 @@ selection[[i]] <- reverse_index_select(cases[i])
 
 
 ```
+
+
 
