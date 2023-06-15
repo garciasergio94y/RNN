@@ -18,7 +18,8 @@ knitr::opts_chunk$set(echo = TRUE)
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
               "tictoc", "wavelets", "gridExtra", "reticulate", "abind",
-              "tensorflow", "tfdatasets", "keras", "ModelMetrics")
+              "tensorflow", "tfdatasets", "keras", "ModelMetrics",
+              "kerastuneR")
 
 # Función para instalar paquetes si no están ya instalados
 install_packages <- function(package) {
@@ -52,6 +53,7 @@ require(tensorflow)
 require(tfdatasets)
 require(keras)
 require(ModelMetrics)
+require(kerastuneR)
 ```
 
 
@@ -548,8 +550,8 @@ create_lstm_data.2 <-
            shuffle = FALSE, batch_size, step = 1,
            predseries) {
   
-  if (is.null(max_index)) max_index <- nrow(data)
-  i <- min_index + lookback - 1
+  if (is.null(max_index)) max_index <- nrow(data) - delay - 1
+  i <- min_index + lookback
   function() {
     if (shuffle) {
       rows <- sample(c((min_index+lookback):max_index), 
@@ -557,14 +559,14 @@ create_lstm_data.2 <-
     } else {
       if (i + batch_size > max_index)
         i <<- min_index + lookback
-      rows <- c(i:min(i+batch_size-1, max_index))
+      rows <- c(i:min(i+batch_size, max_index))
       i <<- i + length(rows)
 }
     samples <- array(0, dim = c(length(rows),
                                 lookback / step,
                                 dim(data)[[-1]]))
     targets <- array(0, dim = c(length(rows)))
-    print(dim(targets))
+    
     for (j in 1:length(rows)) {
       indices <- (rows[[j]] - lookback + 1):(rows[[j]])
       samples[j,,] <- data[indices, ]
@@ -974,7 +976,7 @@ train_k <-  create_lstm_data.2(
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
-    max_index = nrow(train_data),
+    max_index = NULL,
     predseries = predseries)
 
 # Cálculo del número de steps de training:
@@ -990,7 +992,7 @@ val_k <- create_lstm_data.2(
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
-    max_index = nrow(val_data),
+    max_index = NULL,
     predseries = predseries)
 
 # Cálculo del número de steps de training:
@@ -1006,7 +1008,7 @@ test_k <-  create_lstm_data.2(
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
-    max_index = nrow(test_data),
+    max_index = NULL,
     predseries = predseries)
 
 
@@ -1026,7 +1028,7 @@ p <- nkp[3]
 
 input_shape <- c(NA, k, p)
 
-model_2 <- keras_model_sequential() %>%
+model_0 <- keras_model_sequential() %>%
    #layer_masking(mask_value = -99999, input_shape = c(NULL, k, p)) %>%
    layer_lstm(units = 8, 
               #dropout=0.8, 
@@ -1040,6 +1042,8 @@ model_2 <- keras_model_sequential() %>%
     layer_dense(units = 1,
                 activation = "sigmoid")
 
+
+summary(model_0)
 ```
 
 ## Compilación.
@@ -1068,6 +1072,14 @@ model_0 %<>% compile(
                    )
 )
 
+# Secuencia del modelo:
+
+number_sequence <- 0
+file_name <- paste0("lstm_QC_", number_sequence, ".keras") 
+                    
+
+save_model_hdf5(model_0, file.path(resultsdir, "naive_model")) 
+
 callbacks <- list(
   callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
                       # write_grads = T,
@@ -1075,11 +1087,7 @@ callbacks <- list(
                       # update_freq = "batch",
                       # write_images = T
                       ),
-  callback_model_checkpoint(file.path(resultsdir, 
-                                      paste0("lstm_2_",
-                                             format(Sys.time(),
-                                                    "%Y%m%d_%H%M%S"),
-                                             ".keras")),
+  callback_model_checkpoint(file.path(resultsdir, file_name),
                             monitor= "rmse",
                             mode="min",
                             verbose=1,
@@ -1094,92 +1102,20 @@ callbacks <- list(
 ## Entrenamiento.
 
 ```{r model fit}
+
 history_0 <- model_0 %>% fit_generator(
   generator = train_k,
   steps_per_epoch = train_steps,
-  epochs = 10,
+  epochs = 15,
   validation_data = val_k,
   validation_steps = val_steps,
   callbacks = callbacks
 )
 
 
-plot(history_2)
+plot(history_0)
 ```
 
-# Evaluación
-
-```{r, eval=FALSE}
-set.seed(123)
-# Evaluación del modelo:
-path <- file.path(resultsdir, "lstm_2.keras/TRUE")
-model <- load_model_hdf5(path, 
-                         custom_objects = list("rmse" =
-                                                 rmse),
-                         compile = T) 
-evaluation_result <- evaluate(model, test_k, steps = test_steps)
-
-evaluation_result
-```
-
-### Línea base de sentido común
-
-```{r common sense baseline}
-# Función para calcular el MAE promedio para un modelo basado en predecir los targets del set de validación con las mismas muestras de validación, mediante la iteración de lotes de muestras. Esto sería equivalente a un modelo que predice el resultado futuro del QC con el actual y constituye el punto de partida para mejorar (common sense baseline).
-
-evaluate_naive_method <- function() {
-  batch_mae <- c()
-  batch_mse <- c()
-  batch_rmse <- c()
-  for (step in 1:val_steps) {
-    c(samples, targets) %<-% val_k()
-    preds <- samples[,dim(samples)[[2]],2]
-    mae <- mean(abs(preds - targets))
-    mse <- mean((preds - targets)^2)
-    rmse <- sqrt(mse)
-    batch_mae <- c(batch_mae, mae)
-    batch_mse <- c(batch_mse, mse)
-    batch_rmse <- c(batch_rmse, rmse)
-  }
-  naive_mse <- mean(batch_mse)
-  naive_mae <- mean(batch_mae) 
-  naive_rmse <- mean(batch_rmse) 
-  cat("naive_mae", mae, "\n", 
-      "naive_mse", mse, "\n", 
-      "naive_rmse", rmse)
-  naive <- list(naive_mae, naive_mse, naive_rmse)
-  names(naive) <- c("mae", "mse", "rmse")
-  return(naive)
-  
-}
-
-
-# mae y mse del modelo naive:
-naive <- evaluate_naive_method()
-
-# mae del modelo LSTM: 
-mae <- evaluation_result[2]
-
-eval_model <- cbind(train_n$stdev[[2]], train_n$stdev[[1]],
-                    train_n$stdev[[3]], 
-                    naive$mae*train_n$stdev[[3]],
-                    mae*train_n$stdev[[3]])
-
-colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR",
-                          "SD","NAIVE_MAE*SD","MAE*SD")
-
-# Imprimir los resultados de evaluación:
-
-sink(file.path(resultsdir, "model_2.txt"))
-
-naive
-evaluation_result
-eval_model
-
-# Cerrar el archivo de salida
-sink()
-
-```
 
 # Validación cruzada Day Forward Chain
 
@@ -1201,6 +1137,10 @@ forward_chain_cv <- function(s){
   # Listas para conener las funciones generadoras
   train_ks <- list()
   val_ks <- list()
+  
+  # Vectores para guardar el número de steps de cada cadena:
+  train_cvsteps <- c()
+  val_cvsteps <- c()
   
   # Loop a lo largo de los percentiles de tiempo:
   for(i in 1:(length(time_points)-1)){
@@ -1227,8 +1167,12 @@ forward_chain_cv <- function(s){
         delay = delay,
         batch_size = batch_size,
         min_index = 1,
-        max_index = nrow(train_code$data),
+        max_index = NULL,
         predseries = predseries)
+    
+    train_cvsteps <- rbind(train_cvsteps,
+                           round((nrow(train_code$data)-lookback) /
+                                   batch_size)) 
     
     val_k <- create_lstm_data.2(
         data = as.matrix(val_code$data[,-1]),
@@ -1236,64 +1180,182 @@ forward_chain_cv <- function(s){
         delay = delay,
         batch_size = batch_size,
         min_index = 1,
-        max_index = nrow(val_code$data),
+        max_index = NULL,
         predseries = predseries)
     
+    val_cvsteps <- rbind(val_cvsteps, 
+                         round((nrow(val_data)-lookback) / batch_size)) 
+    
     train_ks[[i]] <- train_k
+    
     val_ks[[i]] <- val_k
   
     train_ks %>% setNames(paste0("train_", i, sep = "")) 
   }
+  
   chain <- list(train_ks, val_ks)
   names(chain) <- c("train", "val")
+  chain$trainst <- train_cvsteps
+  chain$valst <- val_cvsteps
 
   return(chain)
 
 }
   
   
-chain <- forward_chain_cv(4)
+chain <- forward_chain_cv(s = 4)
+
 
 ```
+
 ## Entrenamiento y validación con las funciones generadoras Day Forward Chain:
 
 
 ```{r}
 
-train_model_multiple <- function(model, chain, train_steps, val_steps,
-                                 epochs, callbacks) {
-  
-  history <- list()  # Lista para almacenar los historiales de entrenamiento
-  
-  for (i in seq_along(chain)) {
-    train_k <- chain$train[[i]]  # Obtener train_k desde chain
-    val_k <- chain$val[[i]]  # Obtener val_k desde chain
-    
-    history[[i]] <- model %>% fit_generator(
-      generator = train_k,
-      steps_per_epoch = train_steps,
-      epochs = epochs,
-      validation_data = val_k,
-      validation_steps = val_steps,
-      callbacks = callbacks
+history <- list()
+
+for (i in 1:length(chain$train)) {
+
+  # Cargamos el modelo naive sin entrenar:
+  model <- load_model_hdf5(file.path(resultsdir,"naive_model"),
+                         custom_objects = list("rmse" = rmse),
+                         compile = T)
+  file_name <- paste0("lstm_QC_", i, ".cv")
+  # Entrenamos 
+  history[[i]] <- model %>% 
+    fit_generator(
+      generator = chain$train[[i]],
+      steps_per_epoch = chain$trainst[[i]],
+      epochs = 15,
+      validation_data = chain$val[[i]],
+      validation_steps = chain$valst[[i]],
+      callbacks = list(
+  callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
+                      # write_grads = T,
+                      # histogram_freq = 1,
+                      # update_freq = "batch",
+                      # write_images = T
+                      ),
+  callback_model_checkpoint(file.path(resultsdir, file_name),
+                            monitor= "rmse",
+                            mode="min",
+                            verbose=1,
+                            save_best_only = TRUE),
+  callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
+                                patience = 10, min_lr = 0.000001),
+  callback_early_stopping(monitor = "val_loss", patience = 20,
+                          verbose = 1)
+  )
     )
-  }
-  
-  return(history)
+  plot(history[[i]])
 }
 
+  
+```
 
-cross_val_history <- train_model_multiple(model_0,
-                                          chain = chain,
-                                          train_steps = train_steps,
-                                          val_steps = val_steps,
-                                          epochs = 10,
-                                          callbacks = callbacks)
+# Evaluación
+
+## Línea base de sentido común ```evaluate_naive_method```.
+
+Función para calcular el MAE promedio para un modelo basado en predecir los targets del set de validación con las mismas muestras de validación, mediante la iteración de lotes de muestras. Sería equivalente a un modelo que predice el resultado QC a día D+1 con el resultado a día D, y constituye el punto de partida para mejorar (common sense baseline).
+
+```{r common sense baseline}
+
+evaluate_naive_method <- function() {
+  batch_mae <- c()
+  batch_mse <- c()
+  batch_rmse <- c()
+  for (step in 1:val_steps) {
+    c(samples, targets) %<-% test_k()
+    preds <- samples[,dim(samples)[[2]],2]
+    mae <- mean(abs(preds - targets))
+    mse <- mean((preds - targets)^2)
+    rmse <- sqrt(mse)
+    batch_mae <- c(batch_mae, mae)
+    batch_mse <- c(batch_mse, mse)
+    batch_rmse <- c(batch_rmse, rmse)
+  }
+  naive_mse <- mean(batch_mse)
+  naive_mae <- mean(batch_mae) 
+  naive_rmse <- mean(batch_rmse) 
+  cat("naive_mae", mae, "\n", 
+      "naive_mse", mse, "\n", 
+      "naive_rmse", rmse)
+  naive <- list(naive_mae, naive_mse, naive_rmse)
+  names(naive) <- c("mae", "mse", "rmse")
+  return(naive)
+  
+}
+
+# mae, mse y rmse del modelo naive:
+naive <- evaluate_naive_method()
+
+```
+
+Evaluación de los resultados de la validación cruzada.
+
+```{r, eval=FALSE}
+set.seed(123)
+# Evaluación del modelo:
+folders_cv <- list.dirs(resultsdir, recursive = TRUE,
+                        full.names = TRUE)
+matching_folders <- grep(".*\\.cv$", folders_cv, value = TRUE)
+
+# Loop para obtener un informe de los modelos de cross validation:
+cross_validation <- list()
+
+for (folder in matching_folders) {
+  model <- load_model_hdf5(folder,
+                           custom_objects = list("rmse" = rmse),
+                           compile = TRUE)
+  
+  # Evaluación del modelo
+  evaluation_result <- evaluate(model, test_k, steps = test_steps)
+  
+  # Guardar resultados de evaluación en la lista
+  folder_name <- substr(folder, nchar(folder) - 4, nchar(folder))
+  metrics_name <- paste0("metrics_", folder_name)
+  cross_validation[[metrics_name]] <- evaluation_result
+  
+  # Comparación del modelo LSTM y el Naive a través del error absoluto medio
+  mae <- evaluation_result[2]
+  
+  eval_model <- data.frame(
+    CODIGO_PRUEBA = train_n$stdev[[2]],
+    ANALIZADOR = train_n$stdev[[1]],
+    SD = train_n$stdev[[3]],
+    NAIVE_MAE_SD = naive$mae * train_n$stdev[[3]],
+    MAE_SD = mae * train_n$stdev[[3]]
+  )
+  
+  colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR", "SD", "NAIVE_MAE_SD", "MAE_SD")
+  
+  # Guardar resultados de comparación en la lista
+  eval_model_name <- paste0("eval_model_", folder_name)
+  cross_validation[[eval_model_name]] <- eval_model
+}
+
+  # Imprimir los resultados de evaluación:
+
+  sink(file.path(resultsdir, paste0("lstm_QC", format(Sys.time(),
+                                    "%Y%m%d_%H%M%S"), ".cv")))
+
+  cat("\nCross Validation Results:\n")
+  table_html <- kable(cross_validation, format = "html") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+# Escribir la tabla en el archivo de salida
+cat(capture.output(table_html))
+
+# Cerrar el archivo de salida
+  sink()
+
 ```
 
 
 
-### Evaluación por categorías.
+# Evaluación por categorías.
 
 ```{r model evaluation per category}
 # Función para seleccionar los índices en test_indx que corresponden a una combinación determinada de CODIGO_PRUEBA, NIVEL Y ANALIZADOR: 
