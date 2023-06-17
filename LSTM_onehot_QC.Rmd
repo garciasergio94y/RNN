@@ -789,7 +789,7 @@ create_lstm_data.2 <-
 train_data <- as.matrix(train_code$data[,-1])
 
 lookback <- 10    # Número de pasos de tiempo que se toman (k).
-batch_size <- 128 # Tamaño de batch de datos de la función generadora
+batch_size <- 264 # Tamaño de batch de datos de la función generadora
 delay <- 1        # Número de pasos de tiempo hacia el futuro para target
 min_index <- 1    # Posición de inicio de las lecuras de series.
 predseries <- 1   # Posición en la que se encuentra la variable target.
@@ -822,7 +822,7 @@ val_k <- create_lstm_data.2(
     max_index = NULL,
     predseries = predseries)
 
-# Cálculo del número de steps de training:
+# Cálculo del número de steps de validación:
 val_steps <- round((nrow(val_data)-lookback) / batch_size) 
 ```
 
@@ -841,21 +841,22 @@ test_k <-  create_lstm_data.2(
     predseries = predseries)
 
 
-# Cálculo del número de steps de training:
+# Cálculo del número de steps de test:
 test_steps <- round((nrow(test_data)-lookback) / batch_size) 
 ```
 
-### Función ```wrap_gen()```
-Toma como argumento cualquier función generadora y devuelve los tensores mencionados.
+### Funciones wrapper ```wrap_train()``` y ```wrap_val()```.
 
-```{r test wrapper}
+Devuelven los tensores mencionados.
 
-wrap_gen <- function(generator) {
+```{r train wrapper}
+
+wrap_train <- function() {
   seq <- NULL
   
   while (is.null(seq)) {
     tryCatch(
-      seq <- generator(),
+      seq <- train_k(),
       error = function(e) {
         warning("Empty sequence error occurred. Trying the next one.")
         return(NULL)  # Devuelve NULL si ocurre un error en la función
@@ -873,6 +874,56 @@ wrap_gen <- function(generator) {
   return(tensor_list)
 }
 
+```
+
+```{r val wrapper}
+wrap_val <- function() {
+  seq <- NULL
+  
+  while (is.null(seq)) {
+    tryCatch(
+      seq <- val_k(),
+      error = function(e) {
+        warning("Empty sequence error occurred. Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la función
+                      # generadora y continúa el loop while.
+      }
+    )
+  }
+    
+  tensor_list <- list(
+    list(seq[[1]][, , 1, drop = FALSE],
+         seq[[1]][, lookback, -1]),
+    list(seq[[2]])
+  )
+                  
+  return(tensor_list)
+}
+```
+
+```{r test wrapper}
+wrap_test <- function() {
+  seq <- NULL
+  
+  while (is.null(seq)) {
+    tryCatch(
+      seq <- test_k(),
+      error = function(e) {
+        warning("Empty sequence error occurred. Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la función
+                      # generadora y continúa el loop while.
+      }
+    )
+  }
+    
+  tensor_list <- list(
+    list(seq[[1]][, , 1, drop = FALSE],
+         seq[[1]][, lookback, -1]),
+    list(seq[[2]])
+  )
+                  
+  return(tensor_list)
+}
 ```
 
 # RNN LSTM condicional
@@ -895,7 +946,7 @@ loss <- "mae"
 ```{r conditional LSTM}
 # Función para crear el modelo:
 
-conditional_lstm <- function(timesteps, rnn_units, vocabulary_size,
+conditional_lstm <- function(rnn_units, vocabulary_size,
                              dynamic_features, static_features, epochs,
                              number_sequence){
   # Modelo LSTM:
@@ -922,8 +973,8 @@ conditional_lstm <- function(timesteps, rnn_units, vocabulary_size,
   # Capa LSTM que recibe dps valores de estado oculto de la capa de embeddings con la información de las variables estáticas:
   lstm_layer <- layer_lstm(units = lstm_units,
                            name = "lstm_1", 
-                           dropout = 0.8,
-                           recurrent_dropout = 0.1,
+                           dropout = 0.3,
+                           recurrent_dropout = 0.3,
                            kernel_regularizer = regularizer_l2(l=0.01),
                            return_sequences = F,)(dynamic_input_layer,
                                                   initial_state = list(
@@ -957,7 +1008,9 @@ conditional_lstm <- function(timesteps, rnn_units, vocabulary_size,
   
   file_name <- paste0("lstm_QC_", number_sequence, ".keras") 
   
-  save_model_hdf5(model, file.path(resultsdir, "naive_model")) 
+  save_model_weights_hdf5(model, 
+                          file.path(resultsdir, "naive_model.h5"),
+                          overwrite = T) 
 
   # Callbacks
   
@@ -969,40 +1022,30 @@ conditional_lstm <- function(timesteps, rnn_units, vocabulary_size,
                       # write_images = T
                       ),
   callback_model_checkpoint(file.path(resultsdir, file_name),
-                            monitor= "rmse",
-                            mode="min",
+                            monitor = "rmse",
+                            mode = "min",
                             verbose=1,
-                            save_best_only = TRUE),
+                            save_best_only = T, 
+                            save_weights_only = T),
   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
                                 patience = 10, min_lr = 0.000001),
   callback_early_stopping(monitor = "val_loss", patience = 20,
                           verbose = 1)
   )
   
-  # Training
+   # Training
   history <- model %>%
-    fit(wrap_gen(train_k),
+    fit(wrap_train,
         epochs = epochs,
         steps_per_epoch = train_steps,
-        validation_data = val_gen,
-        validation_steps = wrap_gen(val_k),
+        validation_data = wrap_val,
+        validation_steps = val_steps,
         callbacks = callbacks
         )
 
-  # Forecasting
-  fcast <- 
-    net %>% 
-    predict(list(x_test, x_static_test))
-  
-
-  fcast_df <- prepare_output(fcast, x_static_test)
-  fcast_df$model <- model
-
-  list(net, fcast_df)
-  
   plot(history)
   
-  return(history)
+  return(model)
 }
 ```
 
@@ -1023,8 +1066,15 @@ attr(rmse, "py_function_name") <- "rmse"
 
 ```
 
-```{r}
-conditional_lstm(number_sequence = 1)
+## Ajuste del modelo condicional LSTM.
+
+```{r conditional LSTM fit}
+set.seed(123)
+model_0 <- conditional_lstm(dynamic_features = dynamic_features,
+                 static_features = static_features,
+                 vocabulary_size = vocabulary_size,
+                 epochs = 15,
+                 number_sequence = 1)
 ```
 
 
@@ -1034,12 +1084,14 @@ Se usa el paquete ```tfruns``` que permite la optimización múltiple de hiperpa
 
 ```{r}
 runs <- tuning_run("LSTM_QC_script.R", 
-                   runs_dir = file.path(resultsdir, "units&regul"),
-                   sample = T,
+                   runs_dir = file.path(resultsdir, "lb&units&regul"),
+                   sample = 0.5,
                    flags = list(
-                     units = c(8, 12, 16),
-                     dropout1 = c(0.1, 0.4, 0.8),
-                     recurrent_dropout1 = c(0.2, 0.4, 0.8),
+                     lookback = c(5, 10, 20),
+                     batch_size = c(32, 64, 128),
+                     lstm_units= c(8, 12, 16),
+                     dropout1 = c(0.3, 0.8),
+                     recurrent_dropout1 = c(0.1, 0.4, 0.8),
                      L2regularizer1 = c(0.01, 0.001)
                      
 ))
@@ -1224,29 +1276,37 @@ evaluate_naive_method <- function() {
 
 ## Evaluación del modelo.
 
-```{r}
+```{r load weights and export model}
 set.seed(123)
 # Evaluación del modelo:
 
 # Ruta hacia model_0:
-files <- dir(resultsdir, recursive = TRUE,
+load_export <- function(model_name){
+  # Crear una lista de archivos de resultados:
+  files <- dir(resultsdir, recursive = TRUE,
                         full.names = TRUE)
-matching_files <- grep(".*\\_0.keras$", files, value = TRUE)
+  # Buscar por coincidencia los archivos .keras (archivos de weights)
+  matching_files <- grep(".*\\.keras$", files, value = TRUE)
+  
+  # Cargar los weights a model_0 (modelo salvado cada vez que se ejecuta conditional_lstm():
+  model_0 %>% load_model_weights_hdf5(filepath = matching_files)
+  
+  # Exportar modelo serializado a la carpeta resultados. Se deja la learning phase para evitar el error que ocurre en R al guardar modelos con una capa lambda no serializable. 
+  export_savedmodel(model_0, file.path(resultsdir, model_name),
+                    remove_learning_phase = FALSE)
+}
+```
 
-# Carga del modelo:
-model <- load_model_hdf5(matching_files,
-                         custom_objects = list("rmse" =
-                                                 rmse),
-                         compile = T)
 
+```{r}
 # Evaluación usando el dataset de test:
-evaluation_result <- evaluate(model, test_k, steps = test_steps)
+evaluation_result <- evaluate(model_0, wrap_test, steps = test_steps)
 
 evaluation_result
 
 # Modelo naive:
 naive <- evaluate_naive_method()
-naive
+
 ```
 
 ##Evaluación de los resultados de la validación cruzada.
