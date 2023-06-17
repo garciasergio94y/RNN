@@ -22,7 +22,7 @@ packages <- c("readr", "readxl", "purrr", "dplyr", "knitr",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
               "tictoc", "wavelets", "reticulate", "abind",
               "tensorflow", "tfdatasets", "keras", "ModelMetrics",
-              "ROCR")
+              "tfruns","ROCR")
 
 # Función para instalar paquetes si no están ya instalados
 install_packages <- function(package) {
@@ -693,7 +693,7 @@ create_lstm_data.1 <-
            shuffle = FALSE, batch_size, step = 1,
            predseries) {
     
-  if (is.null(max_index)) max_index <- nrow(data) - delay
+  if (is.null(max_index)) max_index <- nrow(data) - delay - 1
   i <- min_index + lookback
   gen <- function() {
     if (shuffle) {
@@ -702,7 +702,7 @@ create_lstm_data.1 <-
     } else {
       if (i + batch_size >= max_index)
         i <<- min_index + lookback
-      rows <- c(i:min(i+batch_size-1, max_index))
+      rows <- c(i:min(i+batch_size, max_index))
       i <<- i + length(rows)
     }
     samples <- array(0, dim = c(length(rows),
@@ -712,44 +712,6 @@ create_lstm_data.1 <-
     for (j in 1:length(rows)) {
       indices <- (rows[[j]] - lookback + 1):(rows[[j]])
       samples[j,,] <- data[indices, -predseries]
-      targets[[j]] <- data[rows[[j]] + delay, predseries]
-    }
-    list(samples, targets)
-  }
-  return(gen)
-}
-
-```
-
-```{r, k length time series generator function with wavelets}
-
-create_lstm_data.3 <- 
-  function(data, lookback, delay, min_index, max_index,
-           shuffle = FALSE, batch_size, step = 1,
-           predseries, wl) {
-    
-  if (is.null(max_index)) max_index <- nrow(data) - delay
-  i <- min_index + lookback
-  gen <- function() {
-    if (shuffle) {
-      rows <- sample(c((min_index+lookback):max_index), 
-                     size = batch_size)
-    } else {
-      if (i + batch_size > max_index)
-        i <<- min_index + lookback
-      rows <- c(i:min(i+batch_size-1, max_index))
-      i <<- i + length(rows)
-    }
-    samples <- array(0, dim = c(length(rows),
-                                lookback / step,
-                                dim(data[,wl])[[-1]],
-                                dim(data[,-wl])[[-1]]-1))
-    targets <- array(0, dim = c(length(rows)))
-    for (j in 1:length(rows)) {
-      indices <- (rows[[j]] - lookback + 1):(rows[[j]])
-      samples[j,,,] <- array(data = c(data[indices, wl], 
-                                data[indices, -c(wl, predseries)]),
-                       dim = c(1, lookback / step, length(wl), dim(data[,-c(wl, predseries)])[[-1]]))
       targets[[j]] <- data[rows[[j]] + delay, predseries]
     }
     list(samples, targets)
@@ -1243,21 +1205,22 @@ test_code <- code_cat_var(subset(test_sel,
 ```
 
 
-## Preparación de series temporales de longitud k agrupadas por categorías y por fechas en los datasets de training y validación. 
+## Creación de las funciones generadoras para las series temporales etiquetadas de los datasets de training, validación y prueba, y de sus correspondientes funciones envolventes o wrapper.
 
-Se crean funciones generadoras que crearán series temporales de datos de longitud fija k (lookback) mediante la función create_lstm_data.1
+
+Se crean funciones generadoras basadas en create_lstm_data.1 que devuelven las series temporales tomando los argumentos necesarios. A su vez, éstas funciones se envuelven en una función wrapper que las llama de forma constante y previene los casos en los que pudieran fallar durante el entrenamiento por falta de datos en alguna serie. 
+
+Estas funciones envolventes están diseñadas con objeto de que puedan servir de entrada de datos a una red neuronal de entrada doble diferenciada para los datos dinámicos y los estáticos, además de generar también la variable objetivo. Para ello generan una lista con dos sublistas, la primera de las cuales contiene 2 tensores, un tensor de orden 3 para los datos de series temporales de la variable dinámica y un tensor de orden 2 para los datos de las variables estáticas. Los datos de la variable objetivo salen en la segunda lista en forma de tensor de orden 0 (vector).
 
 ### Dataset de training.
 
-
 ```{r}
 train_data <- as.matrix(train_code$data[,-1])
-lookback <- 15
-batch_size <- 100
+lookback <- 10
+batch_size <- 64
 delay <- 0
 min_index <- 0
 predseries <- ncol(train_data)
-wl <- c(2:17)
 
 train_k <-  create_lstm_data.1(
     data = train_data,
@@ -1265,23 +1228,9 @@ train_k <-  create_lstm_data.1(
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
-    max_index = nrow(train_data) - delay -1,
+    max_index = NULL,
     predseries = predseries)
 ```
-
-
-```{r}
-train_k <- create_lstm_data.3(
-    data = train_data,
-    lookback = lookback,
-    delay = delay,
-    batch_size = batch_size,
-    min_index = min_index,
-    max_index = max_index,
-    predseries = predseries, 
-    wl = wl)
-```
-
 
 ```{r}
 # Cálculo del número de steps de training:
@@ -1299,23 +1248,9 @@ val_k <-  create_lstm_data.1(
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
-    max_index = nrow(val_data) - delay -1,
+    max_index = NULL,
     predseries = ncol(val_data))
 ```
-
-
-```{r}
-val_k <- create_lstm_data.3(
-    data = val_data,
-    lookback = lookback,
-    delay = delay,
-    batch_size = batch_size,
-    min_index = min_index,
-    max_index = max_index,
-    predseries = predseries, 
-    wl = wl)
-```
-
 
 ```{r}
 # Cálculo del número de steps de training:
@@ -1333,7 +1268,7 @@ test_k <-  create_lstm_data.1(
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
-    max_index = nrow(test_data),
+    max_index = NULL,
     predseries = predseries)
 
 
@@ -1341,7 +1276,86 @@ test_k <-  create_lstm_data.1(
 test_steps <- round((nrow(test_data)-lookback) / batch_size) 
 ```
 
+### Funciones wrapper ```wrap_train()```, ```wrap_val()``` y ```wrap_test()```.
 
+Devuelven los tensores mencionados.
+
+```{r train wrapper}
+
+wrap_train <- function() {
+  seq <- NULL
+  
+  while (is.null(seq)) {
+    tryCatch(
+      seq <- train_k(),
+      error = function(e) {
+        warning("Empty sequence error occurred. Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la función
+                      # generadora y continúa el loop while.
+      }
+    )
+  }
+    
+  tensor_list <- list(
+    list(seq[[1]][, , 1, drop = FALSE],
+         seq[[1]][, , -1, drop = FALSE]),
+    list(seq[[2]])
+  )
+                  
+  return(tensor_list)
+}
+
+```
+
+```{r val wrapper}
+wrap_val <- function() {
+  seq <- NULL
+  
+  while (is.null(seq)) {
+    tryCatch(
+      seq <- val_k(),
+      error = function(e) {
+        warning("Empty sequence error occurred. Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la función
+                      # generadora y continúa el loop while.
+      }
+    )
+  }
+    
+  tensor_list <- list(
+    list(seq[[1]][, , 1, drop = FALSE],
+         seq[[1]][, , -1, drop = FALSE]),
+    list(seq[[2]])
+  )
+                  
+  return(tensor_list)
+}
+```
+
+```{r test wrapper}
+wrap_test <- function() {
+  seq <- NULL
+  
+  while (is.null(seq)) {
+    tryCatch(
+      seq <- test_k(),
+      error = function(e) {
+        warning("Empty sequence error occurred. Trying the next one.")
+        return(NULL)  # Devuelve NULL si ocurre un error en la función
+                      # generadora y continúa el loop while.
+      }
+    )
+  }
+    
+  tensor_list <- list(
+    list(seq[[1]][, , 1, drop = FALSE],
+         seq[[1]][, , -1, drop = FALSE]),
+    list(seq[[2]])
+  )
+                  
+  return(tensor_list)
+}
+```
 
 # Definición del modelo de Machine Learning. Red Neuronal Recurrente LSTM (Long-short term memory) y entrenamiento.
 
@@ -1413,95 +1427,169 @@ attr(recall, "py_function_name") <- "recall"
 
 ```
 
-## Configuración de la red LSTM:
+# RNN LSTM condicional
+Se define una función para crear un modelo completo de red neuronal recurrente condicional, con entrada separada de las variables que cambian con el tiempo a la red LSTM y el resto a través de una capa de embedding.
 
-```{r model definition}
-set.seed(123)
-lapply(list(train_k()[[1]], val_k()[[1]], test_k()[[1]]), dim)
-t <- train_k()
-nkp <- dim(t[[1]])
-nkwp <- dim(t[[1]])
+```{r conditional LSTM}
+# Parámetros para definir el modelo:
 
-k <- nkp[2]
-#w <- nkwp[3]
-p <- nkp[3]
+dynamic_features = 1 # Variables dinámicas (RESULTADO, Wavelets)
+static_features = 3  # Variables estáticas (EDAD_BIN, PACIENTE_SEXO,                                                 ANALIZADOR,CODIGO_PRUEBA)
+lstm_units = 12      # Número de unidades en la capa LSTM 
+vocabulary_size = 33 # Número de niveles codificados de las variables                           estáticas.
+epochs <- 15
+optimizer <- "adam"
 
-input_shape <- c(NULL, k, p)
-#input_shape <- c(NULL, k, w, p)
-
-model_1 <- keras_model_sequential() %>%
-  
-  #layer_masking(mask_value = -99999, input_shape = input_shape) %>%
- 
-  layer_lstm(units = 8,
-            dropout = 0.2,
-             recurrent_dropout = 0.8,
-             return_sequences = T,
-             kernel_regularizer = regularizer_l2(l = 0.00001),
-             input_shape = c(NULL, k, p)
-             ) %>%
-  #layer_lstm(units = 8,
-   #          dropout = 0.5,
-    #         recurrent_dropout = 0.5,
-     #        return_sequences = T,
-             #stateful = T,
-             #kernel_regularizer = regularizer_l2(l = 0.001),
-             #batch_size = 1,
-             #input_shape = c(NULL, k, p)
-      #       ) %>%
-  # layer_conv_1d(filters = 34,
-       #         kernel_size = 3,
-        #        padding = "same",
-         #       activation = "relu",
-          #      input_shape = c(NULL, k, p)
-           #     ) %>%
-  layer_lstm(units = 8,
-             dropout = 0.3,
-             recurrent_dropout = 0.8,
-             return_sequences = T,
-             #stateful = T,
-             kernel_regularizer = regularizer_l2(l = 0.00001),
-             #batch_size = 1,
-             #input_shape = c(NULL, k, p)
-             ) %>%
-  #layer_lstm(units = 8,
-   #          dropout = 0.7,
-    #         recurrent_dropout = 0.5,
-     #        return_sequences = T,
-          #   kernel_regularizer = regularizer_l2(l = 0.0001),
-      #       input_shape = c(NULL, k, p)
-      #       ) %>%
-  #layer_max_pooling_1d(pool_size = 2) %>% 
-  layer_conv_1d(filters = 8,
-                kernel_size = 3,
-                padding = "same",
-                activation = "relu"
-                ) %>%
-  layer_max_pooling_1d(pool_size = 3) %>%
-  
-  #layer_dense(units = 4,
-  #            activation = "relu")%>%
-  layer_flatten()%>%
-  layer_dense(units = 1, 
-              activation = "sigmoid")
-  
-summary(model_1)
 ```
+
+## Función ```conditional_lstm```.
+
+```{r conditional LSTM}
+# Función para crear el modelo:
+
+conditional_lstm <- function(rnn_units, vocabulary_size,
+                             dynamic_features, static_features, epochs,
+                             number_sequence){
+  # Modelo LSTM:
+  
+  # Capa de entrada de datos dinámicos:
+  dynamic_input_layer <- layer_input(shape =
+                                       c(lookback, dynamic_features),
+                                     name = "dynamic_input_layer")
+  #dynamic_input_layer <- layer_masking(mask_value =
+                                         #-99999)(dynamic_input_layer)
+  # Capa de entrada de datos estáticos:
+  static_input_layer <- layer_input(shape = static_features,
+                                    name = "static_input_layer")
+
+  # Capa a de embedding para los datos estáticos:
+  embedding_layer <- layer_embedding(
+    input_dim = vocabulary_size,
+    output_dim = lstm_units)(static_input_layer)
+  
+  # Capa lambda para seleccionar los embeddings que modificarán los estados ocultos de la capa LSTM:
+  embedding_layer <- layer_lambda(f = \(x) x[,1,],
+                          name = "lambda_embeddings")(embedding_layer)
+  
+  # Capa LSTM que recibe dps valores de estado oculto de la capa de embeddings con la información de las variables estáticas:
+  lstm_layer <- layer_lstm(units = lstm_units,
+                           name = "lstm_1", 
+                           #dropout = 0.3,
+                           #recurrent_dropout = 0.3,
+                           #kernel_regularizer = regularizer_l2(l=0.01),
+                           return_sequences = F,)(dynamic_input_layer,
+                                                  initial_state = list(
+                                                    embedding_layer,
+                                                    embedding_layer))
+  
+  # Capa de salida con una unidad de activación lineal para la predicción:  
+  output_layer <- layer_dense(units = 1,
+                              activation = "sigmoid", 
+                              name = "output_layer")(lstm_layer)
+  
+  # Compilación:
+  
+  model <- 
+    keras_model(
+      inputs  = list(dynamic_input_layer, static_input_layer),
+      outputs = list(output_layer)
+      ) %>%
+    compile(
+      optimizer = optimizer_adam(learning_rate = 0.001),
+      loss      = loss_sigmoid_focal_crossentropy(alpha = 0.8, 
+                                         gamma = 4, 
+                  reduction = tf$keras$losses$Reduction$AUTO),
+      # binary_crossentropy
+      list("binary_accuracy",
+                 precision,
+                 recall,
+                 f1_score)
+    )
+
+  # Guardar modelo naïve
+  
+  file_name <- paste0("lstm_QC_", number_sequence, ".keras") 
+  
+  save_model_weights_hdf5(model, 
+                          file.path(resultsdir, "naive_model.h5"),
+                          overwrite = T) 
+
+  # Callbacks
+  
+  callbacks <- list(
+  callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
+                      # write_grads = T,
+                      # histogram_freq = 1,
+                      # update_freq = "batch",
+                      # write_images = T
+                      ),
+  callback_model_checkpoint(file.path(resultsdir, file_name),
+                            monitor = "f1_score",
+                            mode = "max",
+                            verbose=1,
+                            save_best_only = T, 
+                            save_weights_only = T),
+  callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
+                                patience = 10, min_lr = 0.000001),
+  callback_early_stopping(monitor = "val_loss", patience = 20,
+                          verbose = 1)
+  )
+  
+   # Training
+  history <- model %>%
+    fit(wrap_train,
+        epochs = epochs,
+        steps_per_epoch = train_steps,
+        validation_data = wrap_val,
+        validation_steps = val_steps,
+        callbacks = callbacks
+        )
+
+  plot(history)
+  
+  return(model)
+}
+```
+
+## Ajuste del modelo condicional LSTM.
+
+```{r conditional LSTM fit}
+set.seed(123)
+model_samples <- conditional_lstm(dynamic_features = dynamic_features,
+                 static_features = static_features,
+                 vocabulary_size = vocabulary_size,
+                 epochs = 15,
+                 number_sequence = 1)
+```
+
+
+# Optimización
+
+Se usa el paquete ```tfruns``` que permite la optimización múltiple de hiperparámetros y la visualización de los informes. Se ha preparado un script con flags que marcan los valores de los hiperparámetros y el código de definición, compilación y entranamiento del modelo, que después se usa en la función tuning_run para evaluar las combinaciones de valores de hiperparámetros.
+
+```{r}
+runs <- tuning_run("LSTM_QC_script.R", 
+                   runs_dir = file.path(resultsdir, "lb&units&regul"),
+                   sample = 0.5,
+                   flags = list(
+                     lookback = c(5, 10, 20),
+                     batch_size = c(32, 64, 128),
+                     lstm_units= c(8, 12, 16),
+                     dropout1 = c(0.3, 0.8),
+                     recurrent_dropout1 = c(0.1, 0.4, 0.8),
+                     L2regularizer1 = c(0.01, 0.001)
+                     
+))
+
+runs[order(runs$eval_acc, decreasing = TRUE), ]
+```
+
 
 ## Compilación del modelo
 
 ```{r model compilation and callbacks}
 
-model_1 %<>% compile(
-  optimizer = optimizer_adam(learning_rate = 0.00001),
-  #loss = "binary_crossentropy",
-  loss = loss_sigmoid_focal_crossentropy(alpha = 0.8, 
-                                         gamma = 4,
-  reduction = tf$keras$losses$Reduction$AUTO),
-  metrics = list("binary_accuracy",
-                 precision,
-                 recall,
-                 f1_score)
+
   )
    
 callbacks <- list(
