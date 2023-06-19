@@ -5,18 +5,18 @@ library(keras)
 
 FLAGS <- flags(
   flag_numeric("lookback", 10),
-  flag_numeric("lstm_units", 8),
+  flag_numeric("lstm_units", 32),
   flag_numeric("dropout1", 0.1),
   flag_numeric("recurrent_dropout1", 0.1),
   flag_numeric("L2regularizer1", 0.01),
+  
+  flag_numeric("dropout2", 0.1),
+  flag_numeric("recurrent_dropout2", 0.1),
+  flag_numeric("L2regularizer2", 0.01),
+  
+  flag_numeric("dense_u", 12),
   flag_string("optimizer", "adam"),
-  flag_numeric("batch_size", 32)
-   
-
-  #flag_numeric("units2", 8),
-  #flag_numeric("dropout2", 0.1),
-  #flag_numeric("recurrent_dropout2", 0.1),
-  #flag_numeric("L2regularizer2", 0.01),
+  flag_numeric("batch_size", 128)
 )
 
 # Generator functions------------------------------------------------------
@@ -149,44 +149,58 @@ dynamic_features = 1 # Variables dinámicas (QC_RESULT)
 static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y                                              NIVEL)
 lstm_units = FLAGS$lstm_units # Número de unidades en la capa LSTM 
 vocabulary_size = 32 # Número de niveles codificados de las variables                           estáticas.
-epochs <- 50
+epochs <- 20
 optimizer <- "adam"
 loss <- "mae"
 
 # Define Model ------------------------------------------------------------
 
+# Modelo LSTM:
+
+# Capa de entrada de datos dinámicos:
 dynamic_input_layer <- layer_input(shape = 
                                      c(lookback, dynamic_features), 
                                    name = "dynamic_input_layer")
 #dynamic_input_layer <- layer_masking(mask_value =
 #-99999)(dynamic_input_layer)
-
+# Capa de entrada de datos estáticos: 
 static_input_layer <- layer_input(shape = static_features, 
                                   name = "static_input_layer")
 
-
-embedding_layer <- layer_embedding(input_dim = vocabulary_size,
+# Capa a de embedding para los datos estáticos:
+embedding_layer <- layer_embedding(
+  input_dim = vocabulary_size,
   output_dim = lstm_units)(static_input_layer)
 
-
+# Capa lambda para seleccionar los embeddings que modificarán los estados ocultos de la capa LSTM:
 embedding_layer <- layer_lambda(f = \(x) x[,1,],
                                 name = "lambda_embeddings")(embedding_layer)
 
+# Capa LSTM que recibe dps valores de estado oculto de la capa de embeddings con la información de las variables estáticas:
+lstm_layer_b1 <- layer_lstm(units = lstm_units,
+                            name = "lstm_1", 
+                            dropout = FLAGS$dropout1,
+                            recurrent_dropout = FLAGS$recurrent_dropout1,
+                            #kernel_regularizer = regularizer_l2(l=0.01),
+                            return_sequences = T,)(dynamic_input_layer,
+                                                   initial_state = list(
+                                                     embedding_layer,
+                                                     embedding_layer))
 
-lstm_layer <- layer_lstm(units = lstm_units,
-                         name = "layer_lstm", 
-                         dropout = FLAGS$dropout1,
-                         recurrent_dropout = FLAGS$recurrent_dropout1,
-                         kernel_regularizer = regularizer_l2(l = FLAGS$L2regularizer1),
-                         return_sequences = F,)(dynamic_input_layer,
-                                                initial_state = list(
-                                                  embedding_layer,
-                                                  embedding_layer))
+lstm_layer_b2 <- layer_lstm(units = lstm_units,
+                            name = "lstm_2", 
+                            dropout = FLAGS$dropout2,
+                            recurrent_dropout = FLAGS$recurrent_dropout2,
+                            #kernel_regularizer = regularizer_l2(l=0.01),
+                            return_sequences = F)(lstm_layer_b1)
+
+dense1 <- layer_dense(units = FLAGS$dense_u, activation='relu')(lstm_layer_b2)
+
 
 # Capa de salida con una unidad de activación lineal para la predicción:  
 output_layer <- layer_dense(units = 1,
                             activation = "linear", 
-                            name = "output_layer")(lstm_layer)
+                            name = "output_layer")(dense1)
 
 
 # Create model-------------------------------------------------------------
