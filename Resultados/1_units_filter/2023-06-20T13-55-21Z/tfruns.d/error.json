@@ -1,0 +1,4 @@
+{
+  "message": "ValueError: Input 0 of layer \"conv_layer\" is incompatible with the layer: expected min_ndim=3, found ndim=2. Full shape received: (None, 32)\n\u001b[90mRun \u001b]8;;rstudio:run:reticulate::py_last_error()\u0007`reticulate::py_last_error()`\u001b]8;;\u0007 for details.\u001b[39m",
+  "traceback": ["py_call_impl(callable, call_args$unnamed, call_args$named)", "layer(object, ...)", "compose_layer.default(object, x, ...)", "compose_layer(object, x, ...)", "layer_conv_1d(filters = conv_filters, kernel_size = conv_kernels, \n    activation = \"relu\", name = \"conv_layer\")(lstm_layer_1)", "eval(ei, envir)", "eval(ei, envir)", "withVisible(eval(ei, envir))", "tuning_run(\"LSTM_samples_script.R\", runs_dir = file.path(resultsdir, \n    \"1_units_filter\"), sample = 0.1, flags = list(batch_size = c(256), \n    conv_filters = c(12, 24), lstm_units = c(8, 32)))"]
+}

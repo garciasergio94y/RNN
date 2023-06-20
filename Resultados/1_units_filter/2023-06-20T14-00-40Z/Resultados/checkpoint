@@ -1,0 +1,2 @@
+model_checkpoint_path: "LSTM_samples_101"
+all_model_checkpoint_paths: "LSTM_samples_101"

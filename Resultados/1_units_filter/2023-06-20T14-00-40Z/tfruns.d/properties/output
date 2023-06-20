@@ -1,0 +1,232 @@
+
+> library(tfruns)
+
+> library(keras)
+
+> # Hyperparameter flags ---------------------------------------------------
+> 
+> FLAGS <- flags(
++   flag_numeric("lookback", 20),
++   flag_numeric(" ..." ... [TRUNCATED] 
+
+> # Generator functions------------------------------------------------------
+> train_data <- as.matrix(train_code[,-1])
+
+> lookback <- FLAGS$lookback
+
+> batch_size <- FLAGS$batch_size
+
+> delay <- 0
+
+> min_index <- 0
+
+> predseries <- ncol(train_data)
+
+> train_k <-  create_lstm_data.1(
++   data = train_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_ .... [TRUNCATED] 
+
+> # Cálculo del número de steps de training:
+> train_steps <- round((nrow(train_data)-lookback) / batch_size) 
+
+> wrap_train <- function() {
++   seq <- NULL
++   
++   while (is.null(seq)) {
++     tryCatch(
++       seq <- train_k(),
++       error = function(e) {
++ .... [TRUNCATED] 
+
+> #########################################################################
+> 
+> val_data <- as.matrix(val_code[,-1])
+
+> val_k <- create_lstm_data.1(
++   data = val_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_index .... [TRUNCATED] 
+
+> # Cálculo del número de steps de training:
+> val_steps <- round((nrow(val_data)-lookback) / batch_size) 
+
+> wrap_val <- function() {
++   seq <- NULL
++   
++   while (is.null(seq)) {
++     tryCatch(
++       seq <- val_k(),
++       error = function(e) {
++     .... [TRUNCATED] 
+
+> ##########################################################################
+> 
+> test_data <- as.matrix(test_code[,-1])
+
+> test_k <-  create_lstm_data.1(
++   data = test_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_in .... [TRUNCATED] 
+
+> wrap_test <- function() {
++   seq <- NULL
++   
++   while (is.null(seq)) {
++     tryCatch(
++       seq <- test_k(),
++       error = function(e) {
++   .... [TRUNCATED] 
+
+> # Cálculo del número de steps de test:
+> test_steps <- round((nrow(test_data)-lookback) / batch_size) 
+
+> #######################################################################
+> 
+> 
+> # Model parameters-------------------------------------------------- .... [TRUNCATED] 
+
+> static_features = 4  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA,
+
+>                       #EDAD_BIN Y PACIENTE_SEXO )
+> lstm_units = FLAGS$lstm_units # Número de unidades en la capa LSTM 
+
+> conv_filters = FLAGS$conv_filters # Número de filtros capa convolucional
+
+> conv_kernels = FLAGS$conv_kernels # Número de kernels
+
+> vocabulary_size = length(unique(train_code$PACIENTE_SEXO)) +
++   length(unique(train_code$EDAD_BIN))+
++   length(unique(train_code$ANALIZADOR))+
++   .... [TRUNCATED] 
+
+> # Número de niveles codificados de las variables estáticas.
+> 
+> epochs <- 15
+
+> optimizer = optimizer_adam(learning_rate = 0.001)
+
+> loss = loss_sigmoid_focal_crossentropy(alpha = 0.8, 
++                                        gamma = 4, 
++                                        r .... [TRUNCATED] 
+
+> # Define Model ------------------------------------------------------------
+> 
+> # Modelo LSTM:
+> 
+> # Capa de entrada de datos dinámicos:
+> dynamic .... [TRUNCATED] 
+
+> # Capa de entrada de datos estáticos:
+> static_input_layer <- layer_input(
++   shape = c(lookback, static_features), 
++   name = "static_input_layer ..." ... [TRUNCATED] 
+
+> # Aplanado de la capa de datos estáticos antes del embedding:
+> flatten_static_layer <- layer_flatten()(static_input_layer)
+
+> # Capa de embedding para los datos estáticos:
+> embedding_layer <- layer_embedding(
++   input_dim = vocabulary_size,
++   output_dim = lstm_units)(fl .... [TRUNCATED] 
+
+> # Capa lambda para seleccionar los embeddings que modificarán los estados ocultos de la capa LSTM:
+> embedding_layer <- layer_lambda(
++   f = \(x) x .... [TRUNCATED] 
+
+> # Capa LSTM que recibe los valores de estado oculto de la capa convolución con las características que ésta haya extraído:
+> lstm_layer_1 <- layer_l .... [TRUNCATED] 
+
+> # Capa convolucional:
+> conv_layer <- layer_conv_1d(filters = conv_filters,
++                             kernel_size = conv_kernels,
++              .... [TRUNCATED] 
+
+> # Capa densa:
+> dense_layer <- layer_dense(units = 12,
++                            activation = "relu",
++                            name = "dense_ ..." ... [TRUNCATED] 
+
+> # Capa de salida con una unidad de activación lineal para la predicción:  
+> output_layer <- layer_dense(units = 1,
++                             ac .... [TRUNCATED] 
+
+> # Create model-------------------------------------------------------------
+> model <- 
++   keras_model(
++     inputs  = list(dynamic_input_layer, s .... [TRUNCATED] 
+
+> # Funciones de métricas---------------------------------------------------
+> # Funciones para calcular precisión, recall y F1 como métricas para los .... [TRUNCATED] 
+
+> precision <- function(y_true, y_pred) {
++   # Verdaderos positivos: 
++   true_positives <- sum(K$round(K$clip(y_true * y_pred, 0, 1)))
++   
++   # Po .... [TRUNCATED] 
+
+> recall <- function(y_true, y_pred) {
++   # Verdaderos positivos: 
++   true_positives <- sum(K$round(K$clip(y_true * y_pred, 0, 1)))
++   
++   # Posib .... [TRUNCATED] 
+
+> f1_score <- function(y_true, y_pred) {
++   # Verdaderos positivos: 
++   true_positives <- sum(K$round(K$clip(y_true * y_pred, 0, 1)))
++   
++   # Pos .... [TRUNCATED] 
+
+> # Asignación de los nombres de las funciones como atributos py_function_name:
+> 
+> attr(f1_score, "py_function_name") <- "f1_score"
+
+> attr(precision, "py_function_name") <- "precision"
+
+> attr(recall, "py_function_name") <- "recall"
+
+> # Compile-----------------------------------------------------------------
+> model %<>% compile(
++   optimizer = optimizer,
++   loss      = loss,
++  .... [TRUNCATED] 
+
+> # Save naïve model--------------------------------------------------------
+> 
+> file_name <- paste0("lstm_QC_", 0, ".keras") 
+
+> save_model_weights_hdf5(model, 
++                         file.path(resultsdir, "naive_model.h5"),
++                         overwrite = T) 
+
+> # Callbacks---------------------------------------------------------------
+> 
+> # Callbacks
+> 
+> callbacks <- list(
++   callback_model_checkpoint(fi .... [TRUNCATED] 
+
+> # Train model--------------------------------------------------------------
+> 
+> history <- model %>%
++   fit(wrap_train,
++       epochs = epochs,
++ .... [TRUNCATED] 
+
+> plot(history)
+
+> # Evaluate model-----------------------------------------------------------
+> 
+> evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
+
+> evaluation_result
+           loss binary_accuracy       precision          recall 
+      2.3120525       0.9249299       0.0000000       0.0000000 
+       f1_score 
+      0.0000000 

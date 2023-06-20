@@ -1,0 +1,53 @@
+
+> library(tfruns)
+
+> library(keras)
+
+> # Hyperparameter flags ---------------------------------------------------
+> 
+> FLAGS <- flags(
++   flag_numeric("lookback", 20),
++   flag_numeric(" ..." ... [TRUNCATED] 
+
+> # Generator functions------------------------------------------------------
+> train_data <- as.matrix(train_code[,-1])
+
+> lookback <- FLAGS$lookback
+
+> batch_size <- FLAGS$batch_size
+
+> delay <- 0
+
+> min_index <- 0
+
+> predseries <- ncol(train_data)
+
+> train_k <-  create_lstm_data.1(
++   data = train_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_ .... [TRUNCATED] 
+
+> # Cálculo del número de steps de training:
+> train_steps <- round((nrow(train_data)-lookback) / batch_size) 
+
+> wrap_train <- function() {
++   seq <- NULL
++   
++   while (is.null(seq)) {
++     tryCatch(
++       seq <- train_k(),
++       error = function(e) {
++ .... [TRUNCATED] 
+
+> #########################################################################
+> 
+> val_data <- as.matrix(val_code[,-1])
+
+> val_k <- create_lstm_data.2(
++   data = val_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_index .... [TRUNCATED] 

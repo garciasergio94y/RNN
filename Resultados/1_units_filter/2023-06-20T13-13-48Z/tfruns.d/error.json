@@ -1,0 +1,4 @@
+{
+  "message": "object 'dropout1' not found",
+  "traceback": ["eval(as.call(cl2), envir)", "eval(as.call(cl2), envir)", "capture_args(match.call(), list(units = as.integer, input_shape = normalize_shape, \n    batch_input_shape = normalize_shape, batch_size = as_nullable_integer), \n    ignore = \"object\")", "layer_lstm(units = lstm_units, name = \"lstm_1\", dropout = dropout1, \n    recurrent_dropout = recurrent_dropout1, return_sequences = T, \n    )", "eval(ei, envir)", "eval(ei, envir)", "withVisible(eval(ei, envir))", "tuning_run(\"LSTM_samples_script.R\", runs_dir = file.path(resultsdir, \n    \"1_units_filter\"), sample = 0.75, flags = list(batch_size = c(256), \n    conv_filters = c(12, 24), lstm_units = c(8, 32), dense_u = c(12, \n        24)))"]
+}

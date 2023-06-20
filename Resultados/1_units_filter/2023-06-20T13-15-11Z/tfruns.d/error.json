@@ -1,0 +1,4 @@
+{
+  "message": "could not find function \"ccallback_model_checkpoint\"",
+  "traceback": ["eval(ei, envir)", "eval(ei, envir)", "withVisible(eval(ei, envir))", "tuning_run(\"LSTM_samples_script.R\", runs_dir = file.path(resultsdir, \n    \"1_units_filter\"), sample = 0.75, flags = list(batch_size = c(256), \n    conv_filters = c(12, 24), lstm_units = c(8, 32), dense_u = c(12, \n        24)))"]
+}
