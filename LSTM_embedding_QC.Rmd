@@ -13,9 +13,9 @@ output:
 knitr::opts_chunk$set(eval = F)
 ```
 
-# MODELO LSTM_onehot_QC
+# MODELO LSTM_QC
 
-```{r, include=FALSE}
+```{r, include=TRUE}
 # Definir los nombres de los paquetes que se desean instalar
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
               "stringr", "tidyr", "lubridate", "ggplot2", "caret",
@@ -53,6 +53,7 @@ require(reticulate)
 require(abind)
 require(tensorflow)
 require(tfdatasets)
+require(tfaddons)
 require(keras)
 require(ModelMetrics)
 require(tfruns)
@@ -605,7 +606,7 @@ unique_lab_cases.2 <- function(df, categorical_vars) {
 
 ## Lectura de archivos
 
-```{r training and testing data read, include=FALSE}
+```{r training and testing data read, include=T}
 # Lectura de los datos que se usarán para training y test
 
   #Leer los archivos de eventos de QC y crear el data frame events:
@@ -752,7 +753,7 @@ time_point_75
 ```
 
 
-```{r training dataset subsetting and normalization, include=FALSE}
+```{r training dataset subsetting and normalization, include=TRUE}
 # Muestra de entrenamiento:
 train_n <- qc_data_sel_wl %>%
   subset(.[[1]] <= time_point_50) %>%
@@ -846,9 +847,9 @@ create_lstm_data.2 <-
 
 ```{r training generator}
 # Con wavelets:
-train_data <- as.matrix(train_code[,-c(1,19)])
+# train_data <- as.matrix(train_code[,-c(1,19)])
 # Sin wavelets:
-# train_data <- as.matrix(train_code[,-c(1, 3:16, 19)])
+train_data <- as.matrix(train_code[,-c(1, 3:16, 19)])
 
 lookback <- 50    # Número de pasos de tiempo que se toman (k).
 batch_size <- 256 # Tamaño de batch de datos de la función generadora
@@ -873,9 +874,9 @@ train_steps <- round((nrow(train_data)-lookback) / batch_size)
 
 ```{r validation generator}
 # Con wavelets:
-val_data <- as.matrix(val_code[,-c(1, 19)])
+# val_data <- as.matrix(val_code[,-c(1, 19)])
 # Sin wavelets:
-# val_data <- as.matrix(val_code[,-c(1, 3:16, 19)])
+  val_data <- as.matrix(val_code[,-c(1, 3:16, 19)])
 
 
 val_k <- create_lstm_data.2(
@@ -895,9 +896,9 @@ val_steps <- round((nrow(val_data)-lookback) / batch_size)
 
 ```{r test generator}
 # Con wavelets:
-test_data <- as.matrix(test_code[,-c(1, 19)])
+# test_data <- as.matrix(test_code[,-c(1, 19)])
 # Sin wavelets:
-# test_data <- as.matrix(test_code[,-c(1, 3:16, 19)])
+ test_data <- as.matrix(test_code[,-c(1, 3:16, 19)])
 
 test_k <-  create_lstm_data.2(
     data = test_data,
@@ -934,10 +935,10 @@ wrap_train <- function() {
   }
     
   tensor_list <- list(
-    list(#seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
-         seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
-         #seq[[1]][, , -1]),  # Sin wavelets
-         seq[[1]][, , 16:18]), # Con wavelets
+    list(seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         #seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         seq[[1]][, , -1]),  # Sin wavelets
+         #seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
                   
@@ -962,10 +963,10 @@ wrap_val <- function() {
   }
     
   tensor_list <- list(
-    list(#seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
-         seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
-         #seq[[1]][, , -1]),  # Sin wavelets
-         seq[[1]][, , 16:18]), # Con wavelets
+    list(seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         #seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         seq[[1]][, , -1]),  # Sin wavelets
+         #seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
                   
@@ -989,10 +990,10 @@ wrap_test <- function() {
   }
     
   tensor_list <- list(
-    list(#seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
-         seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
-         #seq[[1]][, , -1]),  # Sin wavelets
-         seq[[1]][, , 16:18]), # Con wavelets
+    list(seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         #seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         seq[[1]][, , -1]),  # Sin wavelets
+         #seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
                   
@@ -1006,7 +1007,7 @@ Se define una función para crear un modelo completo de red neuronal recurrente 
 ```{r conditional LSTM parameters}
 # Parámetros para definir el modelo:
 
-dynamic_features = 15 # Variables dinámicas (QC_RESULT)
+dynamic_features = 1 # Variables dinámicas (QC_RESULT)
 static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y
                         #NIVEL)
 lstm_units = 32      # Número de unidades en la capa LSTM
@@ -1031,8 +1032,8 @@ conditional_lstm <- function(lstm_units, dense_u, vocabulary_size,
   dynamic_input_layer <- layer_input(shape = 
                                        c(lookback, dynamic_features), 
                                      name = "dynamic_input_layer")
-  dynamic_input_layer <- layer_masking(mask_value =
-                                         -99999)(dynamic_input_layer)
+  #dynamic_input_layer <- layer_masking(mask_value =
+   #                                      -99999)(dynamic_input_layer)
   # Capa de entrada de datos estáticos: 
   static_input_layer <- layer_input(shape = c(lookback,static_features), 
                                     name = "static_input_layer")
@@ -1482,7 +1483,7 @@ naive_model_final <- conditional_lstm(
 
 model <- load_model_weights_hdf5(naive_model_final, filepath =
                                    file.path(resultsdir,
-                                      "lstm_QC_cv20230619193025.keras"))
+                                      "lstm_QC_100.keras"))
 
 evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
 
@@ -1503,7 +1504,7 @@ set.seed(123)
 folders <- list.files(resultsdir, recursive = TRUE,
                         full.names = TRUE)
 
-matching_folders <- grep(".*cv\\.keras*", folders, value = TRUE)
+matching_folders <- grep(".*101\\.keras*", folders, value = TRUE)
 
 # Loop para obtener un informe de los modelos de cross validation:
 cross_validation <- list()
@@ -1588,17 +1589,17 @@ make_selection <- function() {
                       title = "Nombre de la prueba: ",
                       graphics = T),2]
  
-  #level <- level_opt[menu(level_opt, 
-   #                       title = "Nivel de QC: ",
-    #                      graphics = T)]
-  #anal <- anal_opt[menu(anal_opt, 
-   #                     title = "Analizador: ",
-    #                    graphics = T)]
+  level <- level_opt[menu(level_opt, 
+                          title = "Nivel de QC: ",
+                          graphics = T)]
+  anal <- anal_opt[menu(anal_opt, 
+                        title = "Analizador: ",
+                        graphics = T)]
     
   
-  df <- test_n[test_n$CODIGO_PRUEBA == clc,]
-                 #test_n$ANALIZADOR == anal &
-                 #test_n$NIVEL == level, ]
+  df <- test_n[test_n$CODIGO_PRUEBA == clc &
+                 test_n$ANALIZADOR == anal &
+                 test_n$NIVEL == level, ]
   
   return(df)
 }
