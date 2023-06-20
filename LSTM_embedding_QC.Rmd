@@ -1,14 +1,16 @@
 ---
 title: 'Aplicación del aprendizaje automático al laboratorio de diagnóstico clínico:
   Detección temprana de series analíticas fuera de control en análisis inmunoquímicos
-  de muestras de sangre mediante algoritmos de Machine Learning' 
+  de muestras de sangre mediante algoritmos de Machine Learning'
 author: "Sergio García Muñoz"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(eval = F)
 ```
 
 # MODELO LSTM_onehot_QC
@@ -44,7 +46,6 @@ require(stringr)
 require(tidyr)
 require(lubridate)
 require(ggplot2)
-#require(caret)
 require(wavelets)
 library(gridExtra)
 require(tictoc)
@@ -55,8 +56,6 @@ require(tfdatasets)
 require(keras)
 require(ModelMetrics)
 require(tfruns)
-
-require(R6)
 ```
 
 
@@ -85,14 +84,15 @@ Leer los archivos xls de valores de QC para cada técnica y cada máquina, añad
 
 ```{r read_qc}
 read_qc <- function() {
-  # Crear una lista de archivos existentes en datadir que contienen los valores de QC, tanto en uso como inactivos:
+  # Crear una lista de archivos existentes en datadir que
+  # contienen los valores de QC, tanto en uso como inactivos:
   files_list <- list.files(qcdir, pattern = "CLC",
                            full.names = T) 
   
   # Lista vacía para contener los dataframes originados en el loop:
   list_df <- list()
  
-  # Loop for para crear una lista de dataframes leyendo cada           archivo de qc:
+  # Loop for para crear una lista de dataframes leyendo cada archivo de qc:
   for(i in 1:length(files_list)){
     data <- read_xls(files_list[i], skip = 4)
   
@@ -116,13 +116,18 @@ read_qc <- function() {
     end_pos <- regexpr("\\)", files_list[i], start_pos)
     clc <- substring(files_list[i], start_pos, end_pos - 1)
     
-    # Añadir como columnas "ANALIZADOR" y "CODIGO_PRUEBA" las           cadenas extraídas:
+    # Añadir como columnas "ANALIZADOR" y "CODIGO_PRUEBA" las     cadenas extraídas:
     data %<>% mutate("ANALIZADOR"= substr(dev, 13, 24),
                      "CODIGO_PRUEBA"= paste("CLC",clc, sep = "")) %>%
               relocate("ANALIZADOR", "CODIGO_PRUEBA", .after = 5)
     
-    # En caso de que el archivo de datos sea del histórico, la    identificación del control no se encuentra como columna, sino en la cabecera, ya que los archivos han sido generados para cada  nivel de control individualmente. 
-    # Identificación de este tipo de archivo, extracción de la identificación y creación de la columna "Control": 
+    # En caso de que el archivo de datos sea del histórico,
+    # la    identificación del control no se encuentra como
+    # columna, sino en la cabecera, ya que los archivos han 
+    # sido generados para cada  nivel de control 
+    # individualmente. 
+    # Identificación de este tipo de archivo, extracción de
+    # la identificación y creación de la columna "Control": 
     
     if(!("Control" %in% colnames(data))) {
       # Extraer el nombre del control de la fila 3, columna D:
@@ -148,7 +153,9 @@ read_qc <- function() {
   # Cambia el nombre a la columna Lote de reactivos:
   colnames(df)[10] <- "LOTE_REACTIVO"
   
-  # Fusiona las columnas de los valores de concentraciones         encontrados en distintas unidades en una sola columna y cambia el tipo de valor a numérico:
+  # Fusiona las columnas de los valores de concentraciones 
+  # encontrados en distintas unidades en una sola columna y
+  # cambia el tipo de valor a numérico:
    df <- unite(df, "Resultado", c(3, 13:21),
                           sep = "", na.rm = T)
    df[[3]] %<>% as.numeric()
@@ -185,7 +192,9 @@ qc_level <- function(df) {
   
   # Condiciones para establecer el nivel basado en el nombre del control:
   df$NIVEL <- ifelse(df$CODIGO_PRUEBA == "CLC00544",
-                     # Corregir el caso específico donde de CLC00544, donde CARDIAC BIORAD 3 corresponde al nivel 3, hs-TnI alto al 2 y hs-TnI medio al 1:
+  # Corregir el caso específico donde de CLC00544, 
+  # donde CARDIAC BIORAD 3 corresponde al nivel 3, hs-TnI
+  # alto al 2 y hs-TnI medio al 1:
                      ifelse(df$Control == "CARDIAC BIORAD 3", 3,
                             ifelse(df$Control == "hs-TnI alto", 2,
                                    ifelse(df$Control == "hs-TnI medio", 1, NA))),
@@ -267,7 +276,8 @@ Función para leer los archivos csv de eventos y crear un data frame.
 ```{r read_event}
 
 read_event <- function() {
-  # Crea una lista de archivos existentes en datadir            correspondientes a los eventos de QC diarios:
+  # Crea una lista de archivos existentes en datadir
+  # correspondientes a los eventos de QC diarios:
   files_list <- list.files(eventdir, pattern = "Evento_",
                            full.names = T) 
   
@@ -359,7 +369,8 @@ wavelet_tr <- function(df) {
     relocate(starts_with("W"), .after = 2) %>%
     relocate(starts_with("V"), .before = ANALIZADOR)
   
-  # Sustituir valores NA en los coeficientes wavelet por un valor arbitrario -99999 para su posterior filtrado
+  # Sustituir valores NA en los coeficientes wavelet por un valor
+  # arbitrario -99999 para su posterior filtrado
   wavelet_cols <- grep("^[WV]", colnames(df_wavelet), value = TRUE)
   
   
@@ -427,7 +438,9 @@ norm_test_val <- function(data, means, stds) {
   means_wl <- train_n$means[wavelet_cols]
   stds_wl <- train_n$stdev[wavelet_cols]
   
-  # Normalizar por cada prueba las columnas de resultado y coeficientes wavelet usando las medias y desviaciones estándar de train suministradas:
+  # Normalizar por cada prueba las columnas de resultado y coeficientes
+  # wavelet usando las medias y desviaciones estándar de train
+  # suministradas:
   means <- data %>%
     group_by(ANALIZADOR, CODIGO_PRUEBA) %>%
     left_join(means_r, by = c("ANALIZADOR", "CODIGO_PRUEBA"), 
@@ -482,7 +495,8 @@ Función para convertir las variables categóricas tipo string en vectores numé
 ```{r one-hot coding and normalization}
 
 code_cat_var <- function(data) {
-  # Eliminación de la columna CODIGO_PRUEBA si solo tiene una          categoría:
+  # Eliminación de la columna CODIGO_PRUEBA si solo tiene una 
+  # categoría:
   if(length(unique(data$CODIGO_PRUEBA))==1){
     data %<>% select(., -CODIGO_PRUEBA)
     }
@@ -522,7 +536,7 @@ code_cat_var <- function(data) {
 
 ## Función ```unique_lab_cases```.
 
-Función para crear un código de casos únicos de combinaciones de ANALIZADOR, CÓDIGO_PRUEBA y NIVEL.
+Función para crear un código de casos únicos de combinaciones de ANALIZADOR, CÓDIGO_PRUEBA y NIVEL codificadas con one-hot.
 
 ```{r, indexing function}
 
@@ -531,6 +545,51 @@ unique_lab_cases <- function(df, categorical_vars) {
   
   code <- apply(unique_groups, 1, function(row) {
     paste0(ifelse(row == 1, 1, 0), collapse = "")
+  })
+  unique_groups %<>% mutate(., code)
+  coded_df <- df %>%
+    merge(unique_groups, ., by = colnames(unique_groups)
+          [-length(colnames(unique_groups))])
+  coded_df <- coded_df[, c(colnames(df), "code")]
+  
+  return(coded_df)
+}
+```
+
+## Función ```factor_cat_var```.
+
+
+Función para convertir las variables categóricas tipo string en factores y éstos a números enteros. Codifica las variables categóricas como enteros para luego pasarlas a una capa de embedding.
+
+```{r factor_cat_var}
+
+factor_cat_var <- function(data) {
+  # Detección de variables categóricas:
+  cat_vars <- which(sapply(data, is.character))
+
+  # Conversión a factores y de factores a enteros:
+  data[,cat_vars] <- lapply(data[,cat_vars], function(x) {
+    levels_x <- unique(x)
+    factor_x <- factor(x, levels = levels_x)
+    as.integer(factor_x)
+  })
+
+  return(data)
+}
+
+```
+
+## Función ```unique_lab_cases```.
+
+Crea un índice de casos únicos de combinaciones de variables categóricas codificadas con factor_cat_var.
+
+```{r unique_lab_cases}
+
+unique_lab_cases.2 <- function(df, categorical_vars) {
+  unique_groups <- unique(df[categorical_vars])
+  
+  code <- apply(unique_groups, 1, function(row) {
+    paste(row, collapse = "")
   })
   unique_groups %<>% mutate(., code)
   coded_df <- df %>%
@@ -612,7 +671,8 @@ head(qc_event)
 qc_data_sel <- qc_event %>% subset(.,
                       select = c(TIEMPO_QC, QC_RESULT, ANALIZADOR,
                                  CODIGO_PRUEBA, NOMBRE_PRUEBA, NIVEL))%>%
-  unique(.)
+  unique(.) 
+qc_data_sel %<>% arrange(TIEMPO_QC)
   
 ```
 
@@ -677,7 +737,9 @@ dev.off()
 ## División de los sets de entrenamiento, validación y prueba. Normalización.
 
 ```{r training, validation and test dataset}
-# Se divide el dataset en 50% de datos para entrenamiento, 25% para test y 25% para validación. Para evitar fraccionar las unidades temporales diarias usamos percentiles de la secuencia temporal en días: 
+# Se divide el dataset en 50% de datos para entrenamiento, 25% para test
+# y 25% para validación. Para evitar fraccionar las unidades temporales
+# diarias usamos percentiles de la secuencia temporal en días: 
 
 time_point_50 <- as.POSIXct(as.Date(
   quantile(qc_data_sel_wl[[1]], 0.5)))
@@ -722,18 +784,15 @@ test <- qc_data_sel_wl %>%
 test_n <- test %>% norm_test_val(means = train_n$means, stds = train_n$stdev)
 ```
 
-## Codificación one-hot.
+## Codificación de las variables categóricas con enteros:
 
-### Sin wavelets
-```{r training validation and test dataset onehot coding}
-# Codificación onehot 
+```{r factor coding}
+# Conversión de strings a factores y codificación con enteros:
+train_code <- factor_cat_var(train_n$scaled_data)
 
-train_code <- code_cat_var(
-  train_n$scaled_data[,-c(3:16, 19)]) 
+val_code <- factor_cat_var(val_n)
 
-val_code <- code_cat_var(val_n[,-c(3:16, 19)])
-
-test_code <- code_cat_var(test_n[,-c(3:16, 19)])
+test_code <- factor_cat_var(test_n)
 
 ```
 
@@ -786,8 +845,10 @@ create_lstm_data.2 <-
 ### Función generadora para dataset de training ```train_k()```
 
 ```{r training generator}
-
-train_data <- as.matrix(train_code$data[,-1])
+# Con wavelets:
+train_data <- as.matrix(train_code[,-c(1,19)])
+# Sin wavelets:
+# train_data <- as.matrix(train_code[,-c(1, 3:16, 19)])
 
 lookback <- 50    # Número de pasos de tiempo que se toman (k).
 batch_size <- 256 # Tamaño de batch de datos de la función generadora
@@ -811,8 +872,11 @@ train_steps <- round((nrow(train_data)-lookback) / batch_size)
 ### Función generadora para dataset de validación ```val_k()``` 
 
 ```{r validation generator}
+# Con wavelets:
+val_data <- as.matrix(val_code[,-c(1, 19)])
+# Sin wavelets:
+# val_data <- as.matrix(val_code[,-c(1, 3:16, 19)])
 
-val_data <- as.matrix(val_code$data[,-1])
 
 val_k <- create_lstm_data.2(
     data = val_data,
@@ -830,7 +894,10 @@ val_steps <- round((nrow(val_data)-lookback) / batch_size)
 ### Función generadora para dataset de training ```test_k()```.
 
 ```{r test generator}
-test_data <- as.matrix(test_code$data[,-1])
+# Con wavelets:
+test_data <- as.matrix(test_code[,-c(1, 19)])
+# Sin wavelets:
+# test_data <- as.matrix(test_code[,-c(1, 3:16, 19)])
 
 test_k <-  create_lstm_data.2(
     data = test_data,
@@ -867,8 +934,10 @@ wrap_train <- function() {
   }
     
   tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
+    list(#seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         #seq[[1]][, , -1]),  # Sin wavelets
+         seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
                   
@@ -893,8 +962,10 @@ wrap_val <- function() {
   }
     
   tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
+    list(#seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         #seq[[1]][, , -1]),  # Sin wavelets
+         seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
                   
@@ -918,8 +989,10 @@ wrap_test <- function() {
   }
     
   tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
+    list(#seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         #seq[[1]][, , -1]),  # Sin wavelets
+         seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
                   
@@ -930,15 +1003,17 @@ wrap_test <- function() {
 # RNN LSTM condicional
 Se define una función para crear un modelo completo de red neuronal recurrente condicional, con entrada separada de las variables que cambian con el tiempo a la red LSTM y el resto a través de una capa de embedding.
 
-```{r conditional LSTM}
+```{r conditional LSTM parameters}
 # Parámetros para definir el modelo:
 
-dynamic_features = 1 # Variables dinámicas (QC_RESULT)
-static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y                                              NIVEL)
+dynamic_features = 15 # Variables dinámicas (QC_RESULT)
+static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y
+                        #NIVEL)
 lstm_units = 32      # Número de unidades en la capa LSTM
 dense_u = 24 # Número de unidades de la capa densa.
-vocabulary_size = 32 # Número de niveles codificados de las variables                           estáticas.
-epochs <- 10
+vocabulary_size = 32 # Número de niveles codificados de las variables 
+                     # estáticas.
+epochs <- 20
 optimizer <- "adam"
 loss <- "mae"
 ```
@@ -956,36 +1031,41 @@ conditional_lstm <- function(lstm_units, dense_u, vocabulary_size,
   dynamic_input_layer <- layer_input(shape = 
                                        c(lookback, dynamic_features), 
                                      name = "dynamic_input_layer")
-  #dynamic_input_layer <- layer_masking(mask_value =
-                                         #-99999)(dynamic_input_layer)
+  dynamic_input_layer <- layer_masking(mask_value =
+                                         -99999)(dynamic_input_layer)
   # Capa de entrada de datos estáticos: 
-  static_input_layer <- layer_input(shape = static_features, 
+  static_input_layer <- layer_input(shape = c(lookback,static_features), 
                                     name = "static_input_layer")
   
-  # Capa a de embedding para los datos estáticos:
+  # Aplanado de la capa de datos estáticos antes del embedding:
+  flatten_static_layer <- layer_flatten()(static_input_layer)
+  
+  # Capa de embedding para los datos estáticos:
   embedding_layer <- layer_embedding(
     input_dim = vocabulary_size,
-    output_dim = lstm_units)(static_input_layer)
+    output_dim = lstm_units)(flatten_static_layer)
   
-  # Capa lambda para seleccionar los embeddings que modificarán los estados ocultos de la capa LSTM:
+    # Capa lambda para seleccionar los embeddings que modificarán los
+  # estados ocultos de la capa LSTM:
   embedding_layer <- layer_lambda(f = \(x) x[,1,],
                           name = "lambda_embeddings")(embedding_layer)
-  
-  # Capa LSTM que recibe dps valores de estado oculto de la capa de embeddings con la información de las variables estáticas:
+
+  # Capa LSTM que recibe dps valores de estado oculto de la capa de
+  # embeddings con la información de las variables estáticas:
   lstm_layer_1 <- layer_lstm(units = lstm_units,
                               name = "lstm_1",
-                              dropout = 0.1,
-                              recurrent_dropout = 0.1,
+                              dropout = 0.3,
+                              recurrent_dropout = 0.3,
                               #kernel_regularizer =
                               #regularizer_l2(l=0.01),
-                              return_sequences = T,)(dynamic_input_layer,
+                              return_sequences = T)(dynamic_input_layer,
                                                   initial_state = list(
                                                     embedding_layer,
                                                     embedding_layer))
   
   lstm_layer_2 <- layer_lstm(units = lstm_units,
                              name = "lstm_2", 
-                             dropout = 0.1,
+                             dropout = 0.5,
                              recurrent_dropout = 0.3,
                              #kernel_regularizer = 
                              #regularizer_l2(l=0.01),
@@ -1032,8 +1112,6 @@ conditional_lstm <- function(lstm_units, dense_u, vocabulary_size,
 ```
 
 
-
-
 ## Métrica rmse.
 Se define una función para calcular la métrica error cudrático medio (rmse) usando el backend de Keras y así poder usarla durante el entrenamiento y validación.
 
@@ -1055,7 +1133,7 @@ attr(rmse, "py_function_name") <- "rmse"
 
 ```{r callbacks}
 # Callbacks
-  file_name <- paste0("lstm_QC_", 100, ".keras") 
+  file_name <- paste0("lstm_QC_", 101, ".keras") 
 
   callbacks <- list(
   callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
@@ -1068,13 +1146,19 @@ attr(rmse, "py_function_name") <- "rmse"
                             monitor = "rmse",
                             mode = "min",
                             verbose=1,
-                            #save_weights_only = T, 
+                            save_weights_only = T, 
                             save_best_only = T),
   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
                                 patience = 5, min_lr = 0.000001),
   callback_early_stopping(monitor = "val_loss", patience = 20,
                           verbose = 1)
   )
+```
+
+
+```{r tensorboard}
+# tensorboard dev upload --logdir ./ --name "LSTM_QC_cv" --description "LSTM_QC crossvalidation"
+
 ```
 
 ## Ajuste del modelo condicional LSTM.
@@ -1111,26 +1195,31 @@ Se usa el paquete ```tfruns``` que permite la optimización múltiple de hiperpa
 library(tfruns)
 set.seed(123)
 runs <- tuning_run("LSTM_QC_script.R",
-                   runs_dir = file.path(resultsdir, "6_lb_units_regul"),
+                   runs_dir = file.path(resultsdir, "1_lb_units_regul"),
                    sample = 1,
                    flags = list(
-                     lookback = c(50, 100),
+                     lookback = c(50),
                      batch_size = c(256),
                      lstm_units= c(
                       #8),
-                      #32),
-                      64),
-                     dense_u= c(16, 24),
-                     dropout1 = c(0.3),
+                      32),
+                      #64),
+                     dense_u= c(24),
+                     dropout1 = c(0.3, 0.5),
                      recurrent_dropout1 = c(0.3),
-                     dropout2 = c(0.3),
+                     dropout2 = c(0.3, 0.5),
                      recurrent_dropout2 = c(0.3)
                      #L2regularizer1 = c(0.01, 0.001)
 
 ))
-
+library(kableExtra)
 b <- kable(runs)
-runs[order(runs$eval, decreasing = TRUE), ]
+kable_styling(b)
+runs[order(runs$eval_, decreasing = TRUE), ]
+compare_runs(c(file.path(
+  resultsdir, "1_lb_units_regul/2023-06-19T12-37-14Z"), 
+  file.path(
+  resultsdir, "1_lb_units_regul/2023-06-19T11-54-23Z")))
 ```
 
 
@@ -1173,16 +1262,19 @@ forward_chain_cv <- function(s){
     val_n <- qc_data_sel_wl %>% 
       subset(.[[1]] > time_points[i] & .[[1]] <= time_points[i+1]) %>%
       norm_test_val(., means = train_n$means, stds = train_n$stdev)
+    
     ###################################################################
-    train_code <- code_cat_var(train_n$scaled_data[,-c(3:16, 19)])
-    val_code <- code_cat_var(val_n[,-c(3:16, 19)])
+    
+    train_code <- factor_cat_var(train_n$scaled_data)
+    val_code <- factor_cat_var(val_n)
+    
     ###################################################################
     
     # Crear una lista de funciones generadoras para cada cadena:
     
     # Función generadora de train:
     train_k <- create_lstm_data.2(
-        data = as.matrix(train_code$data[,-1]),
+        data = as.matrix(train_code[,-c(1, 3:16, 19)]),
         lookback = lookback,
         delay = delay,
         batch_size = batch_size,
@@ -1191,7 +1283,7 @@ forward_chain_cv <- function(s){
         predseries = predseries)
     
     train_cvsteps <- rbind(train_cvsteps,
-                           round((nrow(train_code$data)-lookback) /
+                           round((nrow(train_data)-lookback) /
                                    batch_size)) 
     
     # Wrapper de train:
@@ -1211,7 +1303,7 @@ forward_chain_cv <- function(s){
     
   tensor_list <- list(
     list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
+         seq[[1]][, , -1]),
     list(seq[[2]])
   )
                   
@@ -1222,7 +1314,7 @@ forward_chain_cv <- function(s){
     
     # Generadora de val:
     val_k <- create_lstm_data.2(
-        data = as.matrix(val_code$data[,-1]),
+        data = as.matrix(val_code[,-c(1, 3:16, 19)]),
         lookback = lookback,
         delay = delay,
         batch_size = batch_size,
@@ -1299,8 +1391,10 @@ for (i in 1:length(chain$train)) {
   dynamic_features = dynamic_features,
   static_features = static_features,
   vocabulary_size = vocabulary_size)
-    
-    file_name <- paste0("lstm_QC_", i, ".cv")
+  
+  # Nombre del archivo donde se guardarán los weights:
+  current_time <- format(Sys.time(), "%Y%m%d%H%M%S")  
+  file_name <- paste0("lstm_QC_cv",current_time, ".keras")
   
     # Entrenamos 
   history[[i]] <- naive_model_final %>% 
@@ -1375,6 +1469,7 @@ evaluate_naive_method <- function() {
 ## Evaluación del modelo.
 
 ```{r}
+set.seed(123)
 # Evaluación usando el dataset de test:
 
 # Reconstrucción del modelo a partir de los pesos guardados:
@@ -1385,7 +1480,9 @@ naive_model_final <- conditional_lstm(
   static_features = static_features,
   vocabulary_size = vocabulary_size)
 
-model <- load_model_weights_hdf5(naive_model_final, filepath = file.path(resultsdir, "LSTM_QC_100.keras"))
+model <- load_model_weights_hdf5(naive_model_final, filepath =
+                                   file.path(resultsdir,
+                                      "lstm_QC_cv20230619193025.keras"))
 
 evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
 
@@ -1396,7 +1493,7 @@ naive <- evaluate_naive_method()
 
 ```
 
-##Evaluación de los resultados de la validación cruzada.
+## Evaluación de los resultados de la validación cruzada.
 
 ```{r, eval=FALSE}
 set.seed(123)
@@ -1406,7 +1503,7 @@ set.seed(123)
 folders <- list.files(resultsdir, recursive = TRUE,
                         full.names = TRUE)
 
-matching_folders <- grep(".*cv\\.data.*", folders, value = TRUE)
+matching_folders <- grep(".*cv\\.keras*", folders, value = TRUE)
 
 # Loop para obtener un informe de los modelos de cross validation:
 cross_validation <- list()
@@ -1414,7 +1511,7 @@ cross_validation <- list()
 for (folder in matching_folders) {
   
   # Reconstrucción del modelo a partir de los pesos guardados:
-    naive_model_final <- conditional_lstm(
+  naive_model_final <- conditional_lstm(
   lstm_units = lstm_units,
   dense_u = dense_u,
   dynamic_features = dynamic_features,
@@ -1467,142 +1564,67 @@ cat(capture.output(table_html))
 ```
 
 # Evaluación por categorías.
- Con el objetivo de poder hacer evaluaciones selectivas del rendimiento, se crean códigos identificativos únicos de combinaciones de variables categóricas para el dataset de test, usando la función unique_lab_cases e indicando las posiciones de las variables categóricas en train_code$data que se deseen incluir. A modo de ejemplo se incluyen código de prueba y analizador:
 
-```{r trainig set case grouping}
-# Selección de variables categóricas del dataset de training (se puede hacer de cualquier dataset, pero se supone que si alguna categoría no está presente, no debería ocurrir en el de training)
-categorical_vars <- c(3:34)
-train_indx <- unique_lab_cases(train_code$data,
-                               categorical_vars = categorical_vars)
+Se hace una selección con interfaz gráfica mediante la función ```menu()```y se asigna una función generadora a esa combinación. Posteriormente se generan las predicciones y las métricas para dicha combinación, mostrando un gráfico de correlación.
 
-# Extraemos los códigos para realizar un diccionario de traducción de códigos únicos a índices numéricos:
-code_values <- unique(train_indx[,"code"])
-code_dictionary <- data.frame(code = code_values)
-code_dictionary %<>%  
-  mutate(., index = as.numeric(factor(code_values, 
-                                      levels = code_values)))
+## Interfaz gráfica para la selección de combinaciones de prueba, analizador y nivel de QC.
 
-# Extraemos los códigos únicos del dataset de test:
-test_indx <- unique_lab_cases(test_code$data, 
-                             categorical_vars = categorical_vars)
 
-# Usamos el diccionario de códigos creado anteriormente para asignar los índices correspondientes al dataframe de test:
+```{r model evaluation per category}
 
-test_indx$index <- code_dictionary$index[match(test_indx$code, code_dictionary$code)]
-index_values <- unique(test_indx[,"index"])
-test_indx$code <- NULL
+# Función para seleccionar los índices en test_indx que corresponden a
+# una combinación determinada de CODIGO_PRUEBA, NIVEL Y ANALIZADOR: 
 
-# Creamos una función generadora selectiva por índices test_k_i:
+make_selection <- function() {
+  
+  # Opciones para elegir CLC, NIVEL y ANALIZADOR:
+  iqtest_opt <- iqtests[match(unique(test_n$CODIGO_PRUEBA),
+                              iqtests$CODIGO_PRUEBA),]
+  level_opt <- as.character(unique(test_n$NIVEL))
+  anal_opt <- unique(test_n$ANALIZADOR)
+  
+  # Introducción de prueba, nivel y analizador:
+  clc <- iqtest_opt[menu(iqtest_opt[,1], 
+                      title = "Nombre de la prueba: ",
+                      graphics = T),2]
+ 
+  #level <- level_opt[menu(level_opt, 
+   #                       title = "Nivel de QC: ",
+    #                      graphics = T)]
+  #anal <- anal_opt[menu(anal_opt, 
+   #                     title = "Analizador: ",
+    #                    graphics = T)]
+    
+  
+  df <- test_n[test_n$CODIGO_PRUEBA == clc,]
+                 #test_n$ANALIZADOR == anal &
+                 #test_n$NIVEL == level, ]
+  
+  return(df)
+}
+```
 
-test_k_i <- lapply(index_values, function(idx) {
-  create_lstm_data.2(
-    data = as.matrix(test_indx[test_indx[,"index"] == idx,
-                              -c(1, length(test_indx))]),
+## Selección de variables y creación de función generadora selectiva.
+
+```{r make selection}
+
+test_n_i <- make_selection() 
+test_n_i %>% arrange(TIEMPO_QC)
+test_code_i <- factor_cat_var(test_n_i)
+test_data_i <- as.matrix(test_code_i[,-c(1, 3:16, 19)])
+
+test_k_i <-  create_lstm_data.2(
+    data = test_data_i,
     lookback = lookback,
     delay = delay,
     batch_size = batch_size,
     min_index = min_index,
     max_index = NULL,
     predseries = predseries)
-})
-
-# La añadimos a su correspondiente wrapper:
-wrap_test_i <- function() {
-  seq <- NULL
-  
-  while (is.null(seq)) {
-    tryCatch(
-      seq <- test_k_i(),
-      error = function(e) {
-        warning("Empty sequence error occurred. Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la función
-                      # generadora y continúa el loop while.
-      }
-    )
-  }
-    
-  tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
-    list(seq[[2]])
-  )
-                  
-  return(tensor_list)
-}
-
-```
-
-```{r model evaluation per category}
-# Función para seleccionar los índices en test_indx que corresponden a una combinación determinada de CODIGO_PRUEBA, NIVEL Y ANALIZADOR: 
-
-index_select <- function() {
-  
-  # Opciones para elegir CLC, NIVEL y ANALIZADOR:
-  iqtest_opt <- iqtests[match(test_code$levels$CODIGO_PRUEBA,
-                              iqtests$CODIGO_PRUEBA),]
-  level_opt <- test_code$levels$NIVEL
-  anal_opt <- test_code$levels$ANALIZADOR
-  
-  # Introducción de prueba, nivel y analizador:
-  clc <- iqtest_opt[menu(iqtest_opt[,1], 
-                      title = "Nombre de la prueba: ",
-                      graphics = T),2]
-  level <- level_opt[menu(level_opt, 
-                          title = "Nivel de QC: ",
-                          graphics = T)]
-  anal <- anal_opt[menu(anal_opt, 
-                        title = "Analizador: ",
-                        graphics = T)]
-    
-  cat("Indice correspondiente a la prueba: ", clc, "\n", 
-  "nivel: ", level, "\n",
-  "analizador: ", anal, "\n")
-  
-  # Conversión de las variables introducidas en códigos:
-  
-  col_clc <- which(grepl(clc, names(test_indx)))-2
-  col_level <- which(grepl(paste0("NIVEL_", level), names(test_indx)))-2
-  col_anal <- which(grepl(anal, names(test_indx)))-2
-  pos <- list(col_clc, col_level, col_anal)
-  
-  code <- rep(0, length(categorical_vars+2))
-  
-  for (i in seq_along(pos)) {
-    code[pos[[i]]] <- 1 
-  }
-  code <- paste0(as.character(code), collapse = "")
-  
-  # Búsqueda en el diccionario el índice correspondiente al código generado:
-  index <- code_dictionary$index[match(code,
-                                       code_dictionary$code)]
-  print(index)
-  return(index)
-  
-}
-
-# Ejecutamos index_select y creamos una función generadora con el índice elegido, añadiéndola a su wrapper:
-
-index_pred <- index_select()
-
-  test_pred <- lapply(index_pred, function(index_pred) {
-    create_lstm_data.2(
-      data = as.matrix(test_indx[test_indx[,"index"] == index_pred,
-                                 -c(1, length(test_indx))]),
-      lookback = lookback,
-      delay = delay,
-      batch_size = batch_size,
-      min_index = min_index,
-      max_index = NULL,
-      predseries = predseries)
-  }
-    
-  )
-  
-  
-```
 
 
-```{r model prediction and metrics}
+# Carga del modelo.
+
 # Reconstrucción del modelo a partir de los pesos guardados:
 naive_model_final <- conditional_lstm(
   lstm_units = lstm_units,
@@ -1611,14 +1633,21 @@ naive_model_final <- conditional_lstm(
   static_features = static_features,
   vocabulary_size = vocabulary_size)
 
-model <- load_model_weights_hdf5(naive_model_final, filepath = file.path(resultsdir, "LSTM_QC_100.keras"))
+model <- load_model_weights_hdf5(naive_model_final, 
+                                 filepath = file.path(resultsdir,
+                                                    "LSTM_QC_100.keras"))
+
+# Predicciones y métricas
 
 
-# Obtener las series y sus predicciones utilizando la función generadora de tests por categorías y obtener la predicción del modelo:
-x <- list(test_pred[[1]]()[[1]][,,1, drop=F],
-         test_pred[[1]]()[[1]][, lookback, -1])
+# Obtener las series y sus predicciones utilizando la función generadora
+# de tests por categorías y obtener la predicción del modelo:
+seq <- test_k_i()
+x <- list(seq[[1]][, , 1, drop = FALSE],
+         seq[[1]][, , -1])
+y_true <- seq[[2]]
 y_pred <-  predict(model, x = x)
-y_true <- test_pred[[1]]()[[2]]
+
 
 metrics <- list(
   MSE <- mse(actual = y_true, predicted = y_pred),
@@ -1639,117 +1668,39 @@ correlacion <- cor(y_true, y_pred)
 texto_cor <- paste("Correlación:", round(correlacion, 2))
 mtext(texto_cor, side = 3, line = -2.5)
 
+## Gráfico de reales y predichos vs tiempo.
+
+num_prediccion <- seq_along(y_pred)
+
+# Obtener los límites de los ejes y
+y_min <- min(c(y_pred, y_true))
+y_max <- max(c(y_pred, y_true))
+
+# Graficar los valores predichos y reales con límites de ejes y ajustados
+jpeg(" .jpg", quality = 90)
+
+plot(num_prediccion, 
+     y_pred, type = "b", col = "blue", pch = 16, 
+     xlab = "Número de predicción", 
+     ylab = "Valor", 
+     ylim = c(y_min, y_max))
+
+points(num_prediccion, 
+       y_true, 
+       type = "b",
+       col = "red",
+       pch = 16)
+
+legend("topright", legend = c("Predichos", "Reales"), 
+       col = c("blue", "red"), pch = 16)
+
+# Finalizar la salida del archivo JPEG
+dev.off()
 
 ```
 
-```{r all metrics by categories}
-# Calcular las métricas de todas las categorías:
-
-global_metrics <- list()
-
-for(i in seq_along(test_k)){
-  
-  # Calcula x, y_true e y_pred a partir de la primera iteración de las funciones generadoras y el modelo:
-  x <- test_k[[i]]()[[1]]
-  y_true <- test_k[[i]]()[[2]]
-  y_pred <-  predict(model, x = x)
-
-  metrics <- list(
-  MSE <- mse(actual = y_true, predicted = y_pred),
-  MAE <- mae(actual = y_true, predicted = y_pred),
-  Correlación <- cor(y_pred, y_true)
-  )
-
-  names(metrics) <- c("MSE", "MAE", "Coef. correlación")
-  global_metrics[[i]] <- metrics
-
-}
-
-names(global_metrics) <- index_values
-
-# Crear un gráfico para cada elemento de las sublistas en global_metrics
-for (i in 1:3) {
-  plot(1:length(global_metrics), 
-       sapply(global_metrics, "[[", i),
-       pch = 16, 
-       xlab = "Index",
-       ylab = names(global_metrics[[1]][i])
-  )
-}
 
 
-```
-
-```{r index search}
-# Función para hacer la búsqueda inversa de analizador, prueba y nivel a partir de un index:
-
-reverse_index_select <- function(index) {
-  # Buscar el código correspondiente al índice
-  code <- code_dictionary$code[match(index, code_dictionary$index)]
-  
-  # Extraer los dígitos de code
-  digits <- strsplit(code, "")[[1]]
-  
-  # Encontrar las posiciones de los 1 en la secuencia de dígitos
-  pos_anal <- which(digits == "1")[1]
-  pos_clc <- which(digits == "1")[2]
-  pos_level <- which(digits == "1")[3]
-  
-  # Obtener los valores de anal, clc y level
-  anal <- names(test_indx)[16 + pos_anal]
-  clc <- names(test_indx)[16 + pos_clc]
-  level <- names(test_indx)[16 + pos_level]
-  
-  # Devolver los valores encontrados
-  result <- list(CÓDIGO_PRUEBA = substr(clc, 15, 22),
-                 NIVEL = level, 
-                 ANALIZADOR = anal)
-  return(result)
-}
-
-
-
-
-```
-
-```{r problematic cases search}
-
-# Búsqueda de casos con métricas por debajo de la media:
-
-limit_mse <- mse
-limit_mae <- mae
-limit_coef <- 0.7
-
-cases <- c()  # Lista para almacenar los índices
-
-for (i in seq_along(global_metrics)) {
-  
-  sublist <- global_metrics[[i]]  
-  
-  # Extracción de métricas:
-  mse_i <- sublist$MSE
-  mae_i <- sublist$MAE
-  coef_i <- sublist$`Coef. correlación` 
-  
-  if (mse_i >= limit_mse & mae_i >= limit_mae &
-      coef_i <= limit_coef) {
-    cases <- c(cases, i)  # Agregar el índice a la lista
-  }
-}
-
-# Imprimir los índices encontrados
-
-print(cases)
-
-# Transformar índices a información de casos:
-
-selection <-list()
-
-for(i in seq_along(cases))
-selection[[i]] <- reverse_index_select(cases[i])
-
-
-```
 
 
 

@@ -20,7 +20,11 @@ FLAGS <- flags(
 )
 
 # Generator functions------------------------------------------------------
-train_data <- as.matrix(train_code$data[,-1])
+# Con wavelets:
+# train_data <- as.matrix(train_code[,-c(1,19)])
+# Sin wavelets:
+train_data <- as.matrix(train_code[,-c(1, 3:16, 19)])
+
 lookback <- FLAGS$lookback
 batch_size <- FLAGS$batch_size
 delay <- 1
@@ -55,8 +59,10 @@ wrap_train <- function() {
   }
   
   tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
+    list(seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         #seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         seq[[1]][, , -1]),  # Sin wavelets
+    #seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
   
@@ -64,8 +70,10 @@ wrap_train <- function() {
 }
 
 #########################################################################
-
-val_data <- as.matrix(val_code$data[,-1])
+# Con wavelets:
+# val_data <- as.matrix(val_code[,-c(1, 19)])
+# Sin wavelets:
+val_data <- as.matrix(val_code[,-c(1, 3:16, 19)])
 
 val_k <- create_lstm_data.2(
   data = val_data,
@@ -95,16 +103,20 @@ wrap_val <- function() {
   }
   
   tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
+    list(seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         #seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         seq[[1]][, , -1]),  # Sin wavelets
+    #seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
   
   return(tensor_list)
 }
 ##########################################################################
-
-test_data <- as.matrix(test_code$data[,-1])
+# Con wavelets:
+# test_data <- as.matrix(test_code[,-c(1, 19)])
+# Sin wavelets:
+test_data <- as.matrix(test_code[,-c(1, 3:16, 19)])
 
 test_k <-  create_lstm_data.2(
   data = test_data,
@@ -130,8 +142,10 @@ wrap_test <- function() {
   }
   
   tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
+    list(seq[[1]][, , 1, drop = FALSE],  # Sin wavelets
+         #seq[[1]][, , 1:15, drop = FALSE], # Con wavelets
+         seq[[1]][, , -1]),  # Sin wavelets
+    #seq[[1]][, , 16:18]), # Con wavelets
     list(seq[[2]])
   )
   
@@ -146,9 +160,10 @@ test_steps <- round((nrow(test_data)-lookback) / batch_size)
 
 # Model parameters--------------------------------------------------------
 dynamic_features = 1 # Variables dinámicas (QC_RESULT)
-static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y                                              NIVEL)
+# dynamic_features = 15 # Variables dinámicas (QC_RESULT + wavelets)
+static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y NIVEL)
 lstm_units = FLAGS$lstm_units # Número de unidades en la capa LSTM 
-vocabulary_size = 32 # Número de niveles codificados de las variables                           estáticas.
+vocabulary_size = 32 # Número de niveles codificados de las variables estáticas.
 epochs <- 20
 optimizer <- "adam"
 loss <- "mae"
@@ -164,25 +179,28 @@ dynamic_input_layer <- layer_input(shape =
 #dynamic_input_layer <- layer_masking(mask_value =
 #-99999)(dynamic_input_layer)
 # Capa de entrada de datos estáticos: 
-static_input_layer <- layer_input(shape = static_features, 
+static_input_layer <- layer_input(shape = c(lookback,static_features), 
                                   name = "static_input_layer")
+
+# Aplanado de la capa de datos estáticos antes del embedding:
+flatten_static_layer <- layer_flatten()(static_input_layer)
 
 # Capa a de embedding para los datos estáticos:
 embedding_layer <- layer_embedding(
   input_dim = vocabulary_size,
-  output_dim = lstm_units)(static_input_layer)
+  output_dim = lstm_units)(flatten_static_layer)
 
 # Capa lambda para seleccionar los embeddings que modificarán los estados ocultos de la capa LSTM:
 embedding_layer <- layer_lambda(f = \(x) x[,1,],
                                 name = "lambda_embeddings")(embedding_layer)
 
-# Capa LSTM que recibe dps valores de estado oculto de la capa de embeddings con la información de las variables estáticas:
+# Capa LSTM que recibe dos valores de estado oculto de la capa de embeddings con la información de las variables estáticas:
 lstm_layer_b1 <- layer_lstm(units = lstm_units,
                             name = "lstm_1", 
                             dropout = FLAGS$dropout1,
                             recurrent_dropout = FLAGS$recurrent_dropout1,
                             #kernel_regularizer = regularizer_l2(l=0.01),
-                            return_sequences = T,)(dynamic_input_layer,
+                            return_sequences = T)(dynamic_input_layer,
                                                    initial_state = list(
                                                      embedding_layer,
                                                      embedding_layer))
@@ -228,8 +246,8 @@ save_model_weights_hdf5(model,
                         file.path(resultsdir, "naive_model.h5"),
                         overwrite = T) 
 # Callbacks---------------------------------------------------------------
-
-# Callbacks
+current_time <- format(Sys.time(), "%Y%m%d%H%M%S")
+file_name <- paste0("lstm_QC_cv",current_time, ".keras")
 
 callbacks <- list(
   callback_model_checkpoint(file.path(resultsdir, file_name),

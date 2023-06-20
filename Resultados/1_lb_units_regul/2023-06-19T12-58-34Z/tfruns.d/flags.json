@@ -1,0 +1,13 @@
+{
+  "lookback": 50,
+  "lstm_units": 32,
+  "dropout1": 0.5,
+  "recurrent_dropout1": 0.29999999999999999,
+  "L2regularizer1": 0.01,
+  "dropout2": 0.29999999999999999,
+  "recurrent_dropout2": 0.29999999999999999,
+  "L2regularizer2": 0.01,
+  "dense_u": 24,
+  "optimizer": "adam",
+  "batch_size": 256
+}
