@@ -1515,7 +1515,8 @@ Se define una función para crear un modelo completo de red neuronal recurrente 
 # Parámetros para definir el modelo:
 
 dynamic_features = 1 # Variables dinámicas (RESULTADO, Wavelets)
-static_features = 4  # Variables estáticas (EDAD_BIN, PACIENTE_SEXO,                                                 ANALIZADOR,CODIGO_PRUEBA)
+static_features = 4  # Variables estáticas (EDAD_BIN, PACIENTE_SEXO,   
+                      #  ANALIZADOR,CODIGO_PRUEBA)
 lstm_units = 8      # Número de unidades en la capa LSTM 
 dense_u = 12 # Número de unidades de la capa densa.
 vocabulary_size = length(unique(train_code$PACIENTE_SEXO)) +
@@ -1560,7 +1561,8 @@ conditional_lstm <- function(lstm_units, vocabulary_size, dense_u,
   embedding_layer <- layer_lambda(f = \(x) x[,1,],
                           name = "lambda_embeddings")(embedding_layer)
   
-  # Capa LSTM que recibe los valores de estado oculto de la capa convolución con las características que ésta haya extraído:
+  # Capa LSTM que recibe los valores de estado oculto de la capa lambda:
+  
   lstm_layer_1 <- layer_lstm(units = lstm_units,
                            name = "lstm_1", 
                            dropout = 0.3,
@@ -1673,239 +1675,50 @@ naive_model_final <- conditional_lstm(
 ```
 
 
-# Optimización
-
-Se usa el paquete ```tfruns``` que permite la optimización múltiple de hiperparámetros y la visualización de los informes. Se ha preparado un script con flags que marcan los valores de los hiperparámetros y el código de definición, compilación y entranamiento del modelo, que después se usa en la función tuning_run para evaluar las combinaciones de valores de hiperparámetros.
-
-```{r}
-set.seed(123)
-runs <- tuning_run("LSTM_samples_script.R",
-                   runs_dir = file.path(resultsdir, "1_units_filter"),
-                   sample = 0.1,
-                   flags = list(
-                     #lookback = c(50),
-                     batch_size = c(256),
-                     conv_filters = c(12, 24), 
-                     lstm_units = c(8, 32)))
-                     #dropout1 = c(0.3, 0.5),
-                     #recurrent_dropout1 = c(0.3),
-                     #dropout2 = c(0.3, 0.5),
-                     #recurrent_dropout2 = c(0.3)
-                     #L2regularizer1 = c(0.01, 0.001)
-
-
-runs[order(runs$eval_acc, decreasing = TRUE), ]
-```
-
-# Validación cruzada Day Forward Chain
-
-Consiste en considerar cada unidad de tiempo del dataset como un punto para dividirlo, de manera que todos los puntos previos forman una cadena consecutiva de puntos que se usa como set de entrenamiento. Los puntos posteriores a ese set se utilizan como conjunto de test. A su vez, el set de entrenamiento se divide en un subset de entrenamiento y otro de validación y se entrena con ellos. En una nueva iteración se aumentará el tamaño de la cadena, repitiendo el proceso. Para simplificar la elección de los puntos donde se inicia la cadena, se usarán percentiles de la serite temporal en días, y se crearán funciones generadoras que tomarán min y max_index de manera acorde, realizando los entrenamientos todo en una sola función.
-
-## Creación de funciones generadoras para el Day Forward Chain
-Cada función tendrá asignado un rango temporal de datos según un esquema incremental en el una vez dividido el espacio muestral en percentiles, se asignan los primeros al dataset de training y el último al de validación, incrementándose el dataset de training en cada ciclo, y manteniéndose el tamaño del de validación.
-
-```{r}
-# Muestra de validación:
-forward_chain_cv <- function(s){
-  # quantiles dependientes del número de divisiones que se pase (s):
-  q <- seq(1/s, 1, 1/s)
-  
-  # Cálculo de las fechas correspondientes a cada cuantil
-  time_points <- 
-    do.call(quantile,
-            list(as.POSIXct(as.Date(data_sel_wl[[1]])), q))
-  
-  # Listas para contener las funciones generadoras
-  train_ks <- list()
-  val_ks <- list()
-  
-  # Vectores para guardar el número de steps de cada cadena:
-  train_cvsteps <- c()
-  val_cvsteps <- c()
-
-  # Loop a lo largo de los percentiles de tiempo:
-  for(i in 1:(length(time_points)-1)){
-  
-  # Workflow aplicado a cada forward chain:
-    
-    train_n <- data_sel_wl %>%
-      subset(.[[1]] < time_points[i]) %>%
-      normalize_train(.)
-    
-    val_n <- data_sel_wl %>% 
-      subset(.[[1]] > time_points[i] & .[[1]] <= time_points[i+1]) %>%
-      norm_test_val(., means = train_n$means, stds = train_n$stdev)
-    
-    ###################################################################
-    
-    train_code <- factor_cat_var(train_n$scaled_data)
-    val_code <- factor_cat_var(val_n)
-    
-    ###################################################################
-    
-    # Crear una lista de funciones generadoras para cada cadena:
-    
-    # Función generadora de train:
-    train_k <- create_lstm_data.1(
-        data = as.matrix(train_code[,-1]),
-        lookback = lookback,
-        delay = delay,
-        batch_size = batch_size,
-        min_index = 1,
-        max_index = NULL,
-        predseries = predseries)
-    
-    train_cvsteps <- rbind(train_cvsteps,
-                           round((nrow(train_data)-lookback) /
-                                   batch_size)) 
-    
-    # Wrapper de train:
-    wrap_train <- function() {
-  seq <- NULL
-  
-  while (is.null(seq)) {
-    tryCatch(
-      seq <- train_k(),
-      error = function(e) {
-        warning("Empty sequence error occurred. Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la función
-                      # generadora y continúa el loop while.
-      }
-    )
-  }
-    
-  tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, , -1]),
-    list(seq[[2]])
-  )
-                  
-  return(tensor_list)
-}
-    
-    ##################################################################
-    
-    # Generadora de val:
-    val_k <- create_lstm_data.1(
-        data = as.matrix(val_code[,-1]),
-        lookback = lookback,
-        delay = delay,
-        batch_size = batch_size,
-        min_index = 1,
-        max_index = NULL,
-        predseries = predseries)
-    
-    val_cvsteps <- rbind(val_cvsteps, 
-                         round((nrow(val_data)-lookback) / batch_size)) 
-    
-    # Wrapper de validación:
-    
-    wrap_val <- function() {
-  seq <- NULL
-  
-  while (is.null(seq)) {
-    tryCatch(
-      seq <- val_k(),
-      error = function(e) {
-        warning("Empty sequence error occurred. Trying the next one.")
-        return(NULL)  # Devuelve NULL si ocurre un error en la función
-                      # generadora y continúa el loop while.
-      }
-    )
-  }
-    
-  tensor_list <- list(
-    list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, lookback, -1]),
-    list(seq[[2]])
-  )
-                  
-  return(tensor_list)
-}
-    
-    # Guardado de las funcione wrapper en las listas correspondientes:
-    
-    train_ks[[i]] <- wrap_train
-    
-    val_ks[[i]] <- wrap_val
-  
-    train_ks %>% setNames(paste0("train_", i, sep = "")) 
-  }
-  
-  chain <- list(train_ks, val_ks)
-  names(chain) <- c("train", "val")
-  chain$trainst <- train_cvsteps
-  chain$valst <- val_cvsteps
-
-  return(chain)
-
-}
-  
-  
-chain <- forward_chain_cv(s = 4)
-
-
-```
-
-## Entrenamiento y validación con las funciones generadoras Day Forward Chain:
-
-
-```{r}
-
-history <- list()
-
-for (i in 1:length(chain$train)) {
-
-  # Generamos un modelo naive sin entrenar:
-  
-  naive_model_final <- conditional_lstm(
-  lstm_units = lstm_units,
-  dense_u = dense_u,
-  dynamic_features = dynamic_features,
-  static_features = static_features,
-  vocabulary_size = vocabulary_size)
-  
-  # Nombre del archivo donde se guardarán los weights:
-  current_time <- format(Sys.time(), "%Y%m%d%H%M%S")  
-  file_name <- paste0("lstm_QC_cv",current_time, ".keras")
-  
-    # Entrenamos 
-  history[[i]] <- naive_model_final %>% 
-    fit(
-      chain$train[[i]],
-      steps_per_epoch = chain$trainst[[i]],
-      epochs = epochs,
-      validation_data = chain$val[[i]],
-      validation_steps = chain$valst[[i]],
-      callbacks = list(
-  callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
-                      # write_grads = T,
-                      # histogram_freq = 1,
-                      # update_freq = "batch",
-                      # write_images = T
-                      ),
-  callback_model_checkpoint(file.path(resultsdir, file_name),
-                            monitor= "rmse",
-                            mode="min",
-                            verbose=1,
-                            save_best_only = TRUE,
-                            save_weights_only = TRUE),
-  callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
-                                patience = 10, min_lr = 0.000001),
-  callback_early_stopping(monitor = "val_loss", patience = 20,
-                          verbose = 1)
-    )
-  )
-  
-  plot(history[[i]])
-}
-
-  
-```
-
-
 # Evaluación del modelo LSTM
 
+## Carga del modelo:
+
+Se definen distintas rutas para cargar el modelo en función de si se ha entrenado en RStudio o en Google Colab.
+
+```{r, eval=FALSE}
+set.seed(123)
+
+# Evaluación del modelo:
+path <- file.path(resultsdir, "lstm_1.keras/f1_score/max/1/TRUE")
+#path <- file.path(resultsdir, "GC_lstm_15.keras")
+
+model <- load_model_hdf5(path, 
+                         #custom_objects = 
+                           list("precision" = precision,
+                                "recall" = recall, 
+                                "f1_score" = f1_score),
+                                 compile = T) 
+model %<>% compile(
+  optimizer = "adam",
+  #loss = "binary_crossentropy",
+  loss = loss_sigmoid_focal_crossentropy(reduction = tf$keras$losses$Reduction$AUTO),
+  metrics = list("binary_accuracy",
+                 precision,
+                 recall,
+                 f1_score)
+  )
+
+# Cálculo de la evlaución del modelo a partir de la función generadora de # datasets de test:
+evaluation_result <- evaluate(model, test_k, steps = test_steps)
+
+# Obtención el nombre de las métricas:
+metric_names <- names(evaluation_result)
+
+# Crear un vector para almacenar los resultados
+evaluation_results <- length(metric_names)
+
+# Almacenar los resultados en el vector
+for (i in 1:length(metric_names)) {
+  evaluation_results[i] <- evaluation_result[[i]]
+}
+
+```
 
 ## Línea base de sentido común
 
@@ -1963,341 +1776,4 @@ sprintf("Test naive accuracy: %.2f", accuracy_val)
 sink()
 
 ```
-
-## Evaluación del modelo.
-
-```{r}
-set.seed(123)
-# Evaluación usando el dataset de test:
-
-# Reconstrucción del modelo a partir de los pesos guardados:
-naive_model_final <- conditional_lstm(
-  lstm_units = lstm_units,
-  dense_u = dense_u,
-  dynamic_features = dynamic_features,
-  static_features = static_features,
-  vocabulary_size = vocabulary_size)
-
-model <- load_model_weights_hdf5(naive_model_final, filepath =
-                                   file.path(resultsdir,
-                                      "lstm_QC_cv20230619193025.keras"))
-
-evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
-
-evaluation_result
-
-# Modelo naive:
-naive <- evaluate_naive_method()
-
-```
-
-## Evaluación de los resultados de la validación cruzada.
-
-```{r, eval=FALSE}
-set.seed(123)
-
-# Evaluación del modelo:
-# Rutas hacia las carpetas de resultados de crossvalidation:
-folders <- list.files(resultsdir, recursive = TRUE,
-                        full.names = TRUE)
-
-matching_folders <- grep(".*cv\\.keras*", folders, value = TRUE)
-
-# Loop para obtener un informe de los modelos de cross validation:
-cross_validation <- list()
-
-for (folder in matching_folders) {
-  
-  # Reconstrucción del modelo a partir de los pesos guardados:
-  naive_model_final <- conditional_lstm(
-  lstm_units = lstm_units,
-  dense_u = dense_u,
-  dynamic_features = dynamic_features,
-  static_features = static_features,
-  vocabulary_size = vocabulary_size)
-  
-  model <- load_model_weights_hdf5(naive_model_final, filepath = folder)
-  
-  # Evaluación del modelo
-  evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
-  
-  # Guardar resultados de evaluación en la lista
-  folder_name <- substr(folder, nchar(folder) - 4, nchar(folder))
-  metrics_name <- paste0("metrics_", folder_name)
-  cross_validation[[metrics_name]] <- evaluation_result
-  
-  # Comparación del modelo LSTM y el Naive a través del error absoluto medio
-  mae <- evaluation_result[2]
-  
-  eval_model <- data.frame(
-    CODIGO_PRUEBA = train_n$stdev[[2]],
-    ANALIZADOR = train_n$stdev[[1]],
-    SD = train_n$stdev[[3]],
-    NAIVE_MAE_SD = naive$mae * train_n$stdev[[3]],
-    MAE_SD = mae * train_n$stdev[[3]]
-  )
-  
-  colnames(eval_model) <- c("CODIGO_PRUEBA", "ANALIZADOR", "SD", "NAIVE_MAE_SD", "MAE_SD")
-  
-  # Guardar resultados de comparación en la lista
-  eval_model_name <- paste0("eval_model_", folder_name)
-  cross_validation[[eval_model_name]] <- eval_model
-}
-
-  # Imprimir los resultados de evaluación:
-
-  sink(file.path(resultsdir, paste0("lstm_QC", format(Sys.time(),
-                                    "%Y%m%d_%H%M%S"), ".cv")))
-
-  cat("\nCross Validation Results:\n")
-  table_html <- kable(cross_validation, format = "html") %>%
-  kable_styling(bootstrap_options = "striped", full_width = FALSE)
-
-# Escribir la tabla en el archivo de salida
-cat(capture.output(table_html))
-
-# Cerrar el archivo de salida
-  sink()
-
-```
-
-# Evaluación por categorías.
-
-Se hace una selección con interfaz gráfica mediante la función ```menu()```y se asigna una función generadora a esa combinación. Posteriormente se generan las predicciones y las métricas para dicha combinación, mostrando un gráfico de correlación.
-
-## Interfaz gráfica para la selección de combinaciones de prueba, analizador y nivel de QC.
-
-
-```{r model evaluation per category}
-
-# Función para seleccionar los índices en test_indx que corresponden a
-# una combinación determinada de CODIGO_PRUEBA, NIVEL Y ANALIZADOR: 
-
-make_selection <- function() {
-  
-  # Opciones para elegir CLC, NIVEL y ANALIZADOR:
-  iqtest_opt <- iqtests[match(unique(test_n$CODIGO_PRUEBA),
-                              iqtests$CODIGO_PRUEBA),]
-  level_opt <- as.character(unique(test_n$NIVEL))
-  anal_opt <- unique(test_n$ANALIZADOR)
-  
-  # Introducción de prueba, nivel y analizador:
-  clc <- iqtest_opt[menu(iqtest_opt[,1], 
-                      title = "Nombre de la prueba: ",
-                      graphics = T),2]
- 
-  #level <- level_opt[menu(level_opt, 
-   #                       title = "Nivel de QC: ",
-    #                      graphics = T)]
-  #anal <- anal_opt[menu(anal_opt, 
-   #                     title = "Analizador: ",
-    #                    graphics = T)]
-    
-  
-  df <- test_n[test_n$CODIGO_PRUEBA == clc,]
-                 #test_n$ANALIZADOR == anal &
-                 #test_n$NIVEL == level, ]
-  
-  return(df)
-}
-```
-
-## Selección de variables y creación de función generadora selectiva.
-
-```{r make selection}
-
-test_n_i <- make_selection() 
-test_n_i %>% arrange(TIEMPO_QC)
-test_code_i <- factor_cat_var(test_n_i)
-test_data_i <- as.matrix(test_code_i[,-c(1, 3:16, 19)])
-
-test_k_i <-  create_lstm_data.2(
-    data = test_data_i,
-    lookback = lookback,
-    delay = delay,
-    batch_size = batch_size,
-    min_index = min_index,
-    max_index = NULL,
-    predseries = predseries)
-
-
-# Carga del modelo.
-
-# Reconstrucción del modelo a partir de los pesos guardados:
-naive_model_final <- conditional_lstm(
-  lstm_units = lstm_units,
-  dense_u = dense_u,
-  dynamic_features = dynamic_features,
-  static_features = static_features,
-  vocabulary_size = vocabulary_size)
-
-model <- load_model_weights_hdf5(naive_model_final, 
-                                 filepath = file.path(resultsdir,
-                                                    "LSTM_QC_100.keras"))
-
-# Predicciones y métricas
-
-
-# Obtener las series y sus predicciones utilizando la función generadora
-# de tests por categorías y obtener la predicción del modelo:
-seq <- test_k_i()
-x <- list(seq[[1]][, , 1, drop = FALSE],
-         seq[[1]][, , -1])
-y_true <- seq[[2]]
-y_pred <-  predict(model, x = x)
-
-
-metrics <- list(
-  MSE <- mse(actual = y_true, predicted = y_pred),
-  MAE <- mae(actual = y_true, predicted = y_pred),
-  Correlación <- cor(y_pred, y_true)
-)
-names(metrics) <- c("MSE", "MAE", "Coef. correlación")
-metrics
-
-# Crear el gráfico de dispersión entre y_pred e y_true
-plot(y_true, y_pred, pch = 16, col = "blue", xlab = "y_true", ylab = "y_pred", 
-     main = "Gráfico de dispersión: y_true vs. y_pred")
-
-# Calcular el coeficiente de correlación
-correlacion <- cor(y_true, y_pred)
-
-# Agregar el coeficiente de correlación al gráfico
-texto_cor <- paste("Correlación:", round(correlacion, 2))
-mtext(texto_cor, side = 3, line = -2.5)
-
-## Gráfico de reales y predichos vs tiempo.
-
-num_prediccion <- seq_along(y_pred)
-
-# Obtener los límites de los ejes y
-y_min <- min(c(y_pred, y_true))
-y_max <- max(c(y_pred, y_true))
-
-# Graficar los valores predichos y reales con límites de ejes y ajustados
-jpeg(" .jpg", quality = 90)
-
-plot(num_prediccion, 
-     y_pred, type = "b", col = "blue", pch = 16, 
-     xlab = "Número de predicción", 
-     ylab = "Valor", 
-     ylim = c(y_min, y_max))
-
-points(num_prediccion, 
-       y_true, 
-       type = "b",
-       col = "red",
-       pch = 16)
-
-legend("topright", legend = c("Predichos", "Reales"), 
-       col = c("blue", "red"), pch = 16)
-
-# Finalizar la salida del archivo JPEG
-dev.off()
-
-```
-```{r model prediction and metrics}
-
-# Obtener las series y sus predicciones utilizando la función generadora
-# de tests por categorías y obtener la predicción del modelo:
-
-
-x <- test_pred[[1]]()[[1]]
-y_pred <- predict(model, x, probability = T)
-y_true <- test_pred[[1]]()[[2]]
-
-# Crear el gráfico de dispersión entre y_pred e y_true
-plot(y_true, y_pred, pch = 16, col = "blue", xlab = "y_true", ylab = "y_pred", 
-     main = cat("Gráfico de dispersión: y_true vs. y_pred",
-                index_pred[[2]]))
-
-# Gráficos de evaluación del modelo de clasificación binaria: 
-preds <- prediction(as.vector(y_pred), as.vector(y_true))
-perf <- performance(preds, "sens", "f")
-plot(perf,
-     colorize=TRUE,
-     main = cat("Sensivility vs F1 score", index_pred[[2]]))
-abline(a=1, b= 0)
-
-perf <- performance(preds, "tpr", "fpr")
-plot(perf,
-     avg="threshold",
-     spread.estimate="boxplot",
-     main = cat("Average TPR vs FNR", index_pred[[2]]))
-
-perf <- performance(preds, "prec", "rec")
-plot(perf,
-     avg= "threshold",
-     colorize=TRUE,
-     lwd= 3,
-     main= cat("Precision vs Recall", index_pred[[2]]))
-plot(perf,
-     lty=3,
-     col="grey78",
-     add=TRUE)
-perf <- performance(preds, "sens", "spec")
-plot(perf,
-     avg= "threshold",
-     colorize=TRUE,
-     lwd= 3,
-     main= cat("Sensitivity vs Specificity", index_pred[[2]]))
-plot(perf,
-     lty=3,
-     col="grey78",
-     add=TRUE)
-perf <- performance(preds, "tpr", "fpr")
-plot(perf,
-     avg= "threshold",
-     colorize=TRUE,
-     lwd= 3,
-     main= cat("ROC curve", index_pred[[2]]))
-plot(perf,
-     lty=3,
-     col="grey78",
-     add=TRUE)
-
-
-
-
-
-```
-
-```{r all metrics by categories}
-# Calcular las métricas de todas las categorías:
-
-global_metrics <- list()
-
-for(i in seq_along(test_k)){
-  
-  # Calcula x, y_true e y_pred a partir de la primera iteración de las funciones generadoras y el modelo:
-  x <- test_k[[i]]()[[1]]
-  y_true <- test_k[[i]]()[[2]]
-  y_pred <-  predict(model, x = x)
-
-  metrics <- list(
-  MSE <- mse(actual = y_true, predicted = y_pred),
-  MAE <- mae(actual = y_true, predicted = y_pred),
-  Correlación <- cor(y_pred, y_true)
-  )
-
-  names(metrics) <- c("MSE", "MAE", "Coef. correlación")
-  global_metrics[[i]] <- metrics
-
-}
-
-names(global_metrics) <- index_values
-
-# Crear un gráfico para cada elemento de las sublistas en global_metrics
-for (i in 1:3) {
-  plot(1:length(global_metrics), 
-       sapply(global_metrics, "[[", i),
-       pch = 16, 
-       xlab = "Index",
-       ylab = names(global_metrics[[1]][i])
-  )
-}
-
-
-```
-
 `
