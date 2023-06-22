@@ -4,13 +4,15 @@ title: 'Aplicación del aprendizaje automático al laboratorio de diagnóstico c
   de muestras de sangre mediante algoritmos de Machine Learning'
 author: "Sergio García Muñoz"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 # LSTM_onehot_samples
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(eval = F)
 ```
 
 # Instalación y carga de paquetes requeridos:
@@ -1127,7 +1129,7 @@ clc_dropout <- iqtests$CODIGO_PRUEBA[which(!(iqtests$CODIGO_PRUEBA %in%
 
 ### Exclusión del modelo general de las técnicas que no alcanzan representación de la categoría CTRL = 1 en todos los datasets.
 
-```{r CLC exclusion}
+```{r CLC exclusin}
 # Filtrado por código de pruebas que en training no tienen representación en la categoría CTRL = 1, y creación de una lista.
 
 clc_sel <- list()
@@ -1179,7 +1181,7 @@ lapply(list(train_code$data, val_code$data, test_code$data), ncol)
 
 ### Con wavelets sin RESULTADO.
 
-```{r one-hot coding with wavelets}
+```{r one-hot coding with wavelet}
 train_code <- code_cat_var(subset(train_sel,
                                   select = -c(2, NOMBRE_PRUEBA.x)))
 
@@ -1444,7 +1446,7 @@ optimizer <- "adam"
 
 ## Función ```conditional_lstm```.
 
-```{r conditional LSTM}
+```{r conditional LSTMs}
 # Función para crear el modelo:
 
 conditional_lstm <- function(rnn_units, vocabulary_size,
@@ -1730,271 +1732,3 @@ sprintf("Test naive accuracy: %.2f", accuracy_val)
 sink()
 
 ```
-
-## Evaluación por categorías.
-
-```{r model evaluation per category}
-# Función para seleccionar los índices en test_indx que corresponden a una combinación determinada de CODIGO_PRUEBA, Y ANALIZADOR. Usa el argumento n según la estructura de datos en función de si hay wavelets o no:
-
-n <- 9 # Sin wavelets
-
-index_select <- function(n) {
-  
-  # Opciones para elegir CLC y ANALIZADOR:
-  clc_opt <- test_code$levels$CODIGO_PRUEBA
-  names_opt <- iqtests$data.NOMBRE_PRUEBA.x[
-    iqtests$data.CODIGO_PRUEBA %in% clc_opt]
-  anal_opt <- test_code$levels$ANALIZADOR
-  
-  # Introducción de la fecha por el usuario:
-  #date <- readline(
-   # "fecha del día anterior a la predicción (aaaa-mm-dd): ")
-  #if(!date %in% as.Date(test_code$data$TIEMPO_QC))
-   #  print("fecha no incluida en dataset")
-  
-  # Introducción de prueba y analizador:
-  test_name <- names_opt[menu(names_opt, 
-                      title = "Nombre de la prueba: ",
-                      graphics = T)]
-  
-  clc <- iqtests$data.CODIGO_PRUEBA[
-    iqtests$data.NOMBRE_PRUEBA.x==test_name]
-  
-  #anal <- anal_opt[menu(anal_opt, 
-   #                     title = "Analizador: ",
-    #                    graphics = T)]
-    
-  cat("Indice correspondiente a la prueba: ", clc, test_name, "\n")
-  #,"analizador: ", anal, "\n")
-  
-  # Conversión de las variables introducidas en índice:
-  
-  col_clc <- which(grepl(clc, names(test_indx)))-n
-  #col_anal <- which(grepl(anal, names(test_indx)))-n
-  pos <- list(col_clc)#, col_anal)
-  
-  code <- rep(0, length(categorical_vars_test))
-  
-  for (i in seq_along(pos)) {
-    code[pos[[i]]] <- 1 
-  }
-  code <- paste0(as.character(code), collapse = "")
-  
-  index <- code_dictionary_test$index[match(code,
-                                       code_dictionary_test$code)]
-  print(index)
-  return(list(index, test_name, clc))#, anal))
-  
-}
-
-index_pred <- index_select(n)
-
-  test_pred <- lapply(index_pred[[1]], function(idx) {
-    create_lstm_data.1(
-      data = as.matrix(test_indx[test_indx[,"index"] == idx,
-                                 -c(1, length(test_indx))]),
-      lookback = lookback,
-      delay = delay,
-      batch_size = batch_size,
-      min_index = min_index,
-      max_index = 
-      nrow(as.matrix(test_indx[test_indx[,"index"] == idx,]))-delay-1,
-      predseries = predseries)
-  }
-  )
-
-```
-
-
-```{r model prediction and metrics}
-
-# Obtener las series y sus predicciones utilizando la función generadora de tests por categorías y obtener la predicción del modelo:
-
-
-x <- test_pred[[1]]()[[1]]
-y_pred <- predict(model, x, probability = T)
-y_true <- test_pred[[1]]()[[2]]
-
-# Crear el gráfico de dispersión entre y_pred e y_true
-plot(y_true, y_pred, pch = 16, col = "blue", xlab = "y_true", ylab = "y_pred", 
-     main = cat("Gráfico de dispersión: y_true vs. y_pred",
-                index_pred[[2]]))
-
-# Gráficos de evaluación del modelo de clasificación binaria: 
-preds <- prediction(as.vector(y_pred), as.vector(y_true))
-perf <- performance(preds, "sens", "f")
-plot(perf,
-     colorize=TRUE,
-     main = cat("Sensivility vs F1 score", index_pred[[2]]))
-abline(a=1, b= 0)
-
-perf <- performance(preds, "tpr", "fpr")
-plot(perf,
-     avg="threshold",
-     spread.estimate="boxplot",
-     main = cat("Average TPR vs FNR", index_pred[[2]]))
-
-perf <- performance(preds, "prec", "rec")
-plot(perf,
-     avg= "threshold",
-     colorize=TRUE,
-     lwd= 3,
-     main= cat("Precision vs Recall", index_pred[[2]]))
-plot(perf,
-     lty=3,
-     col="grey78",
-     add=TRUE)
-perf <- performance(preds, "sens", "spec")
-plot(perf,
-     avg= "threshold",
-     colorize=TRUE,
-     lwd= 3,
-     main= cat("Sensitivity vs Specificity", index_pred[[2]]))
-plot(perf,
-     lty=3,
-     col="grey78",
-     add=TRUE)
-perf <- performance(preds, "tpr", "fpr")
-plot(perf,
-     avg= "threshold",
-     colorize=TRUE,
-     lwd= 3,
-     main= cat("ROC curve", index_pred[[2]]))
-plot(perf,
-     lty=3,
-     col="grey78",
-     add=TRUE)
-
-
-
-
-
-```
-
-```{r all metrics by categories}
-# Calcular las métricas de todas las categorías:
-
-global_metrics <- list()
-
-for(i in seq_along(test_k)){
-  
-  # Calcula x, y_true e y_pred a partir de la primera iteración de las funciones generadoras y el modelo:
-  x <- test_k[[i]]()[[1]]
-  y_true <- test_k[[i]]()[[2]]
-  y_pred <-  predict(model, x = x)
-
-  metrics <- list(
-  MSE <- mse(actual = y_true, predicted = y_pred),
-  MAE <- mae(actual = y_true, predicted = y_pred),
-  Correlación <- cor(y_pred, y_true)
-  )
-
-  names(metrics) <- c("MSE", "MAE", "Coef. correlación")
-  global_metrics[[i]] <- metrics
-
-}
-
-names(global_metrics) <- index_values
-
-# Crear un gráfico para cada elemento de las sublistas en global_metrics
-for (i in 1:3) {
-  plot(1:length(global_metrics), 
-       sapply(global_metrics, "[[", i),
-       pch = 16, 
-       xlab = "Index",
-       ylab = names(global_metrics[[1]][i])
-  )
-}
-
-
-```
-
-```{r index search}
-# Función para hacer la búsqueda inversa de analizador, prueba y nivel a partir de un index:
-
-reverse_index_select <- function(index, n) {
-  # Buscar el código correspondiente al índice
-  code <- code_dictionary_test$code[match(index, code_dictionary_test$index)]
-  
-  # Extraer los dígitos de code
-  digits <- strsplit(code, "")[[1]]
-  
-  # Encontrar las posiciones de los 1 en la secuencia de dígitos
-  pos_anal <- which(digits == "1")[1]
-  pos_clc <- which(digits == "1")[2]
-  
-  # Obtener los valores de anal, clc y level
-  anal <- names(test_indx)[n + pos_anal]
-  clc <- names(test_indx)[n + pos_clc]
-  
-  # Devolver los valores encontrados
-  result <- list(CÓDIGO_PRUEBA = substr(clc, 15, 22),
-                 ANALIZADOR = anal)
-  return(result)
-}
-
-
-
-
-```
-
-```{r problematic cases search}
-
-# Búsqueda de casos con métricas por debajo de la media:
-
-limit_mse <- mse
-limit_mae <- mae
-limit_coef <- 0.7
-
-cases <- c()  # Lista para almacenar los índices
-
-for (i in seq_along(global_metrics)) {
-  
-  sublist <- global_metrics[[i]]  
-  
-  # Extracción de métricas:
-  mse_i <- sublist$MSE
-  mae_i <- sublist$MAE
-  coef_i <- sublist$`Coef. correlación` 
-  
-  if (mse_i >= limit_mse & mae_i >= limit_mae &
-      coef_i <= limit_coef) {
-    cases <- c(cases, i)  # Agregar el índice a la lista
-  }
-}
-
-# Imprimir los índices encontrados
-
-print(cases)
-
-# Transformar índices a información de casos:
-
-selection <-list()
-
-for(i in seq_along(cases))
-selection[[i]] <- reverse_index_select(cases[i])
-
-
-```
-
-
-```{r loop, eval=FALSE}
-# Iniciar el loop que se ejecutará periódicamente para leer los archivos csv en la fase de puesta en producción
-while (TRUE) {
-  tic() # iniciar contador de tiempo
-  
-  # Leer los archivos Excel de Lotes y crear un data frame    feautures
-  features <- read_lot()
-    
-  
-```
-
-```{r end loop, eval=FALSE}
-
-  
-  # Esperar el intervalo de tiempo definido antes de la siguiente lectura
-  Sys.sleep(intervalo - toc())
-}
-
-```
-
