@@ -1274,8 +1274,11 @@ forward_chain_cv <- function(s){
     # Crear una lista de funciones generadoras para cada cadena:
     
     # Función generadora de train:
+    
+    train_data <- as.matrix(train_code[,-c(1, 3:16, 19)])
+    
     train_k <- create_lstm_data.2(
-        data = as.matrix(train_code[,-c(1, 3:16, 19)]),
+        data = train_data,
         lookback = lookback,
         delay = delay,
         batch_size = batch_size,
@@ -1314,8 +1317,11 @@ forward_chain_cv <- function(s){
     ##################################################################
     
     # Generadora de val:
+    
+    val_data <- as.matrix(val_code[,-c(1, 3:16, 19)])
+    
     val_k <- create_lstm_data.2(
-        data = as.matrix(val_code[,-c(1, 3:16, 19)]),
+        data = val_data,
         lookback = lookback,
         delay = delay,
         batch_size = batch_size,
@@ -1549,18 +1555,27 @@ for (folder in matching_folders) {
 
   # Imprimir los resultados de evaluación:
 
-  sink(file.path(resultsdir, paste0("lstm_QC", format(Sys.time(),
-                                    "%Y%m%d_%H%M%S"), ".cv")))
+sink(file.path(resultsdir, 
+                 paste0("lstm_QC_cv",
+                        format(Sys.time(), "%Y%m%d_%H%M%S"), ".html")))
 
-  cat("\nCross Validation Results:\n")
-  table_html <- kable(cross_validation, format = "html") %>%
-  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+cat("\nCross Validation Results:\n")
 
-# Escribir la tabla en el archivo de salida
-cat(capture.output(table_html))
+# Recorrer las listas de cross_validation
+for (i in seq_along(cross_validation)) {
+  list_name <- names(cross_validation)[i]
+  
+  cat("\nResults for:", list_name, "\n")
+  
+  table_html <- kable(cross_validation[[i]], format = "html") %>%
+    kable_styling(bootstrap_options = "striped", full_width = FALSE)
+  
+  # Escribir la tabla en el archivo de salida
+  cat(as.character(table_html))
+}
 
 # Cerrar el archivo de salida
-  sink()
+sink()
 
 ```
 
