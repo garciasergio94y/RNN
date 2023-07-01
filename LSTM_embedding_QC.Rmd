@@ -18,7 +18,7 @@ knitr::opts_chunk$set(eval = F)
 ```{r, include=TRUE}
 # Definir los nombres de los paquetes que se desean instalar
 packages <- c("readr", "readxl", "purrr", "dplyr", "filesstrings",
-              "stringr", "tidyr", "lubridate", "ggplot2", "caret",
+              "stringr", "tidyr", "lubridate", "ggplot2", 
               "tictoc", "wavelets", "gridExtra", "reticulate", "abind",
               "tensorflow", "tfdatasets", "keras", "ModelMetrics",
               "tfruns"
@@ -735,6 +735,16 @@ par(mfrow = c(1, 1))
 dev.off()
 ```
 
+## Selección de pruebas individuales o grupos de pruebas.
+
+```{r test group selection}
+
+qc_data_sel_wl %<>% subset(CODIGO_PRUEBA == "CLC00816" | 
+                             CODIGO_PRUEBA == "CLC00817")
+
+```
+
+
 ## División de los sets de entrenamiento, validación y prueba. Normalización.
 
 ```{r training, validation and test dataset}
@@ -764,6 +774,7 @@ train_n <- qc_data_sel_wl %>%
 
 
 ```{r validation dataset subsetting and normalization}
+
 # Muestra de validación:
 val <- qc_data_sel_wl %>%
   subset(
@@ -851,8 +862,8 @@ create_lstm_data.2 <-
 # Sin wavelets:
 train_data <- as.matrix(train_code[,-c(1, 3:16, 19)])
 
-lookback <- 50    # Número de pasos de tiempo que se toman (k).
-batch_size <- 256 # Tamaño de batch de datos de la función generadora
+lookback <- 5    # Número de pasos de tiempo que se toman (k).
+batch_size <- 32 # Tamaño de batch de datos de la función generadora
 delay <- 1        # Número de pasos de tiempo hacia el futuro para target
 min_index <- 1    # Posición de inicio de las lecuras de series.
 predseries <- 1   # Posición en la que se encuentra la variable target.
@@ -1010,11 +1021,12 @@ Se define una función para crear un modelo completo de red neuronal recurrente 
 dynamic_features = 1 # Variables dinámicas (QC_RESULT)
 static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y
                         #NIVEL)
-lstm_units = 32      # Número de unidades en la capa LSTM
-dense_u = 24 # Número de unidades de la capa densa.
-vocabulary_size = 32 # Número de niveles codificados de las variables 
+lstm_units = 12# Número de unidades en la capa LSTM
+dense_u = 8 # Número de unidades de la capa densa.
+# vocabulary_size = 32 # Número de niveles codificados de las variables 
                      # estáticas.
-epochs <- 20
+vocabulary_size = 7
+epochs <- 40
 optimizer <- "adam"
 loss <- "mae"
 ```
@@ -1055,25 +1067,25 @@ conditional_lstm <- function(lstm_units, dense_u, vocabulary_size,
   # embeddings con la información de las variables estáticas:
   lstm_layer_1 <- layer_lstm(units = lstm_units,
                               name = "lstm_1",
-                              dropout = 0.3,
+                              dropout = 0.1,
                               recurrent_dropout = 0.3,
                               #kernel_regularizer =
                               #regularizer_l2(l=0.01),
-                              return_sequences = T)(dynamic_input_layer,
+                              return_sequences = F)(dynamic_input_layer,
                                                   initial_state = list(
                                                     embedding_layer,
                                                     embedding_layer))
   
-  lstm_layer_2 <- layer_lstm(units = lstm_units,
-                             name = "lstm_2", 
-                             dropout = 0.5,
-                             recurrent_dropout = 0.3,
+  #lstm_layer_2 <- layer_lstm(units = lstm_units,
+   #                          name = "lstm_2", 
+    #                         dropout = 0.3,
+     #                        recurrent_dropout = 0.3,
                              #kernel_regularizer = 
                              #regularizer_l2(l=0.01),
-                             return_sequences = F)(lstm_layer_1)
+      #                       return_sequences = F)(lstm_layer_1)
   
   dense1 <- layer_dense(units = dense_u, 
-                        activation = "relu")(lstm_layer_2)
+                        activation = "relu")(lstm_layer_1)
   
   
   # Capa de salida con una unidad de activación lineal para la predicción:  
@@ -1134,7 +1146,7 @@ attr(rmse, "py_function_name") <- "rmse"
 
 ```{r callbacks}
 # Callbacks
-  file_name <- paste0("lstm_QC_", 101, ".keras") 
+  file_name <- paste0("lstm_QC_", 200, ".keras") 
 
   callbacks <- list(
   callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
@@ -1151,7 +1163,7 @@ attr(rmse, "py_function_name") <- "rmse"
                             save_best_only = T),
   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1,
                                 patience = 5, min_lr = 0.000001),
-  callback_early_stopping(monitor = "val_loss", patience = 20,
+  callback_early_stopping(monitor = "val_loss", patience = 10,
                           verbose = 1)
   )
 ```
@@ -1197,20 +1209,21 @@ library(tfruns)
 set.seed(123)
 runs <- tuning_run("LSTM_QC_script.R",
                    runs_dir = file.path(resultsdir, "1_lb_units_regul"),
-                   sample = 1,
+                   sample = 0.3,
                    flags = list(
-                     lookback = c(50),
-                     batch_size = c(256),
+                     lookback = c(5, 10),
+                     batch_size = c(64, 32),
                      lstm_units= c(
-                      #8),
-                      32),
+                      8,
+                      12),
                       #64),
-                     dense_u= c(24),
-                     dropout1 = c(0.3, 0.5),
-                     recurrent_dropout1 = c(0.3),
-                     dropout2 = c(0.3, 0.5),
-                     recurrent_dropout2 = c(0.3)
-                     #L2regularizer1 = c(0.01, 0.001)
+                     dense_u= c(8, 12),
+                     dropout1 = c(0.1, 0.3),
+                     recurrent_dropout1 = c(0.1, 0.3)
+                     #dropout2 = c(0.1, 0.5),
+                     #recurrent_dropout2 = c(0.1, 0.5),
+                    # L2regularizer1 = c(0.01, 0.001),
+                    # L2regularizer2 = c(0.01, 0.001)
 
 ))
 library(kableExtra)
@@ -1218,9 +1231,9 @@ b <- kable(runs)
 kable_styling(b)
 runs[order(runs$eval_, decreasing = TRUE), ]
 compare_runs(c(file.path(
-  resultsdir, "1_lb_units_regul/2023-06-19T12-37-14Z"), 
+  resultsdir, "1_lb_units_regul/2023-06-30T20-47-23Z"), 
   file.path(
-  resultsdir, "1_lb_units_regul/2023-06-19T11-54-23Z")))
+  resultsdir, "1_lb_units_regul/2023-06-30T20-23-52Z")))
 ```
 
 
@@ -1483,7 +1496,7 @@ naive_model_final <- conditional_lstm(
 
 model <- load_model_weights_hdf5(naive_model_final, filepath =
                                    file.path(resultsdir,
-                                      "lstm_QC_100.keras"))
+                                      "lstm_QC_200.keras"))
 
 evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
 
@@ -1498,13 +1511,14 @@ naive <- evaluate_naive_method()
 
 ```{r, eval=FALSE}
 set.seed(123)
+require(kableExtra)
 
 # Evaluación del modelo:
 # Rutas hacia las carpetas de resultados de crossvalidation:
 folders <- list.files(resultsdir, recursive = TRUE,
                         full.names = TRUE)
 
-matching_folders <- grep(".*101\\.keras*", folders, value = TRUE)
+matching_folders <- grep(".*cv\\.keras*", folders, value = TRUE)
 
 # Loop para obtener un informe de los modelos de cross validation:
 cross_validation <- list()

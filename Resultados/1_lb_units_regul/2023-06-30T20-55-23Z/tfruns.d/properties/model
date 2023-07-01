@@ -1,0 +1,24 @@
+Model: "model"
+________________________________________________________________________________
+ Layer (type)             Output Shape      Param #  Connected to               
+================================================================================
+ static_input_layer (Inpu  [(None, 10, 3)]  0        []                         
+ tLayer)                                                                        
+ flatten (Flatten)        (None, 30)        0        ['static_input_layer[0][0]'
+                                                     ]                          
+ embedding (Embedding)    (None, 30, 12)    84       ['flatten[0][0]']          
+ dynamic_input_layer (Inp  [(None, 10, 1)]  0        []                         
+ utLayer)                                                                       
+ lambda_embeddings (Lambd  (None, 12)       0        ['embedding[0][0]']        
+ a)                                                                             
+ lstm_1 (LSTM)            (None, 12)        672      ['dynamic_input_layer[0][0]
+                                                     ',                         
+                                                      'lambda_embeddings[0][0]',
+                                                      'lambda_embeddings[0][0]']
+ dense (Dense)            (None, 12)        156      ['lstm_1[0][0]']           
+ output_layer (Dense)     (None, 1)         13       ['dense[0][0]']            
+================================================================================
+Total params: 925
+Trainable params: 925
+Non-trainable params: 0
+________________________________________________________________________________

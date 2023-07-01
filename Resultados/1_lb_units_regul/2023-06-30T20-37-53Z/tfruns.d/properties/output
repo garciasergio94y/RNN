@@ -1,0 +1,199 @@
+
+> library(tfruns)
+
+> library(keras)
+
+> # Hyperparameter flags ---------------------------------------------------
+> 
+> FLAGS <- flags(
++   flag_numeric("lookback", 10),
++   flag_numeric(" ..." ... [TRUNCATED] 
+
+> # Generator functions------------------------------------------------------
+> # Con wavelets:
+> # train_data <- as.matrix(train_code[,-c(1,19)])
+> # .... [TRUNCATED] 
+
+> lookback <- FLAGS$lookback
+
+> batch_size <- FLAGS$batch_size
+
+> delay <- 1
+
+> min_index <- 1
+
+> predseries <- 1
+
+> train_k <-  create_lstm_data.2(
++   data = train_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_ .... [TRUNCATED] 
+
+> # Cálculo del número de steps de training:
+> train_steps <- round((nrow(train_data)-lookback) / batch_size) 
+
+> wrap_train <- function() {
++   seq <- NULL
++   
++   while (is.null(seq)) {
++     tryCatch(
++       seq <- train_k(),
++       error = function(e) {
++ .... [TRUNCATED] 
+
+> #########################################################################
+> # Con wavelets:
+> # val_data <- as.matrix(val_code[,-c(1, 19)])
+> # Sin  .... [TRUNCATED] 
+
+> val_k <- create_lstm_data.2(
++   data = val_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_index .... [TRUNCATED] 
+
+> # Cálculo del número de steps de training:
+> val_steps <- round((nrow(val_data)-lookback) / batch_size) 
+
+> wrap_val <- function() {
++   seq <- NULL
++   
++   while (is.null(seq)) {
++     tryCatch(
++       seq <- val_k(),
++       error = function(e) {
++     .... [TRUNCATED] 
+
+> ##########################################################################
+> # Con wavelets:
+> # test_data <- as.matrix(test_code[,-c(1, 19)])
+> # S .... [TRUNCATED] 
+
+> test_k <-  create_lstm_data.2(
++   data = test_data,
++   lookback = lookback,
++   delay = delay,
++   batch_size = batch_size,
++   min_index = min_in .... [TRUNCATED] 
+
+> wrap_test <- function() {
++   seq <- NULL
++   
++   while (is.null(seq)) {
++     tryCatch(
++       seq <- test_k(),
++       error = function(e) {
++   .... [TRUNCATED] 
+
+> # Cálculo del número de steps de test:
+> test_steps <- round((nrow(test_data)-lookback) / batch_size) 
+
+> #######################################################################
+> 
+> 
+> # Model parameters-------------------------------------------------- .... [TRUNCATED] 
+
+> # dynamic_features = 15 # Variables dinámicas (QC_RESULT + wavelets)
+> static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y NIVEL .... [TRUNCATED] 
+
+> lstm_units = FLAGS$lstm_units # Número de unidades en la capa LSTM 
+
+> vocabulary_size = 7 # Número de niveles codificados de las variables estáticas.
+
+> epochs <- 20
+
+> optimizer <- "adam"
+
+> loss <- "mae"
+
+> # Define Model ------------------------------------------------------------
+> 
+> # Modelo LSTM:
+> 
+> # Capa de entrada de datos dinámicos:
+> dynamic .... [TRUNCATED] 
+
+> #dynamic_input_layer <- layer_masking(mask_value =
+> #-99999)(dynamic_input_layer)
+> # Capa de entrada de datos estáticos: 
+> static_input_layer <-  .... [TRUNCATED] 
+
+> # Aplanado de la capa de datos estáticos antes del embedding:
+> flatten_static_layer <- layer_flatten()(static_input_layer)
+
+> # Capa a de embedding para los datos estáticos:
+> embedding_layer <- layer_embedding(
++   input_dim = vocabulary_size,
++   output_dim = lstm_units)( .... [TRUNCATED] 
+
+> # Capa lambda para seleccionar los embeddings que modificarán los estados ocultos de la capa LSTM:
+> embedding_layer <- layer_lambda(f = \(x) x[,1,] .... [TRUNCATED] 
+
+> # Capa LSTM que recibe dos valores de estado oculto de la capa de embeddings con la información de las variables estáticas:
+> lstm_layer_b1 <- layer .... [TRUNCATED] 
+
+> #lstm_layer_b2 <- layer_lstm(units = lstm_units,
+>  #                           name = "lstm_2", 
+>   #                          dropout = FLAGS$dro .... [TRUNCATED] 
+
+> # Capa de salida con una unidad de activación lineal para la predicción:  
+> output_layer <- layer_dense(units = 1,
++                             ac .... [TRUNCATED] 
+
+> # Create model-------------------------------------------------------------
+> model <- 
++   keras_model(
++     inputs  = list(dynamic_input_layer, s .... [TRUNCATED] 
+
+> # Compile-----------------------------------------------------------------
+> model %<>% compile(
++   optimizer = optimizer,
++   loss      = loss,
++  .... [TRUNCATED] 
+
+> # Save naïve model--------------------------------------------------------
+> 
+> # file_name <- paste0("lstm_QC_", 0, ".keras") 
+> 
+> save_model_weig .... [TRUNCATED] 
+
+> # Callbacks---------------------------------------------------------------
+> current_time <- format(Sys.time(), "%Y%m%d%H%M%S")
+
+> file_name <- paste0("lstm_QC_op",current_time, ".keras")
+
+> callbacks <- list(
++   callback_model_checkpoint(file.path(resultsdir, file_name),
++                             monitor = "rmse",
++                 .... [TRUNCATED] 
+
+> # Define metric rmse ------------------------------------------------------
+> 
+> K <- keras::backend()
+
+> rmse <- function(y_pred, y_true) {
++   sq_diff <- K$square(y_pred - y_true)
++   mean_sq_diff <- K$mean(sq_diff)
++   rmse_value <- K$sqrt(mean_sq_dif .... [TRUNCATED] 
+
+> attr(rmse, "py_function_name") <- "rmse"
+
+> # Train model--------------------------------------------------------------
+> 
+> history <- model %>%
++   fit(wrap_train,
++       epochs = epochs,
++ .... [TRUNCATED] 
+
+> plot(history)
+
+> # Evaluate model-----------------------------------------------------------
+> 
+> evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
+
+> evaluation_result
+     loss       mae       mse      rmse 
+0.6192608 0.6192608 0.6954437 0.8148577 

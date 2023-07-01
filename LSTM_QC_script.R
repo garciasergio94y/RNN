@@ -163,7 +163,7 @@ dynamic_features = 1 # Variables dinámicas (QC_RESULT)
 # dynamic_features = 15 # Variables dinámicas (QC_RESULT + wavelets)
 static_features = 3  # Variables estáticas (ANALIZADOR, CODIGO_PRUEBA Y NIVEL)
 lstm_units = FLAGS$lstm_units # Número de unidades en la capa LSTM 
-vocabulary_size = 32 # Número de niveles codificados de las variables estáticas.
+vocabulary_size = 7 # Número de niveles codificados de las variables estáticas.
 epochs <- 20
 optimizer <- "adam"
 loss <- "mae"
@@ -199,20 +199,22 @@ lstm_layer_b1 <- layer_lstm(units = lstm_units,
                             name = "lstm_1", 
                             dropout = FLAGS$dropout1,
                             recurrent_dropout = FLAGS$recurrent_dropout1,
-                            #kernel_regularizer = regularizer_l2(l=0.01),
-                            return_sequences = T)(dynamic_input_layer,
+                            #kernel_regularizer = regularizer_l2(l=
+                              #                      FLAGS$L2regularizer1),
+                            return_sequences = F)(dynamic_input_layer,
                                                    initial_state = list(
                                                      embedding_layer,
                                                      embedding_layer))
 
-lstm_layer_b2 <- layer_lstm(units = lstm_units,
-                            name = "lstm_2", 
-                            dropout = FLAGS$dropout2,
-                            recurrent_dropout = FLAGS$recurrent_dropout2,
-                            #kernel_regularizer = regularizer_l2(l=0.01),
-                            return_sequences = F)(lstm_layer_b1)
+#lstm_layer_b2 <- layer_lstm(units = lstm_units,
+ #                           name = "lstm_2", 
+  #                          dropout = FLAGS$dropout2,
+   #                         recurrent_dropout = FLAGS$recurrent_dropout2,
+    #                        kernel_regularizer = regularizer_l2(l=
+     #                                               FLAGS$L2regularizer2),
+      #                      return_sequences = F)(lstm_layer_b1)
 
-dense1 <- layer_dense(units = FLAGS$dense_u, activation='relu')(lstm_layer_b2)
+dense1 <- layer_dense(units = FLAGS$dense_u, activation='relu')(lstm_layer_b1)
 
 
 # Capa de salida con una unidad de activación lineal para la predicción:  
@@ -240,14 +242,14 @@ model %<>% compile(
 
 # Save naïve model--------------------------------------------------------
 
-file_name <- paste0("lstm_QC_", 0, ".keras") 
+# file_name <- paste0("lstm_QC_", 0, ".keras") 
 
 save_model_weights_hdf5(model, 
                         file.path(resultsdir, "naive_model.h5"),
                         overwrite = T) 
 # Callbacks---------------------------------------------------------------
 current_time <- format(Sys.time(), "%Y%m%d%H%M%S")
-file_name <- paste0("lstm_QC_cv",current_time, ".keras")
+file_name <- paste0("lstm_QC_op",current_time, ".keras")
 
 callbacks <- list(
   callback_model_checkpoint(file.path(resultsdir, file_name),

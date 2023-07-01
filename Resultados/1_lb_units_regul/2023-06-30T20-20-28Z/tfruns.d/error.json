@@ -1,0 +1,4 @@
+{
+  "message": "object 'lstm_layer_b2' not found",
+  "traceback": ["compose_layer(object, x, ...)", "layer_dense(units = FLAGS$dense_u, activation = \"relu\")(lstm_layer_b2)", "eval(ei, envir)", "eval(ei, envir)", "withVisible(eval(ei, envir))", "tuning_run(\"LSTM_QC_script.R\", runs_dir = file.path(resultsdir, \n    \"1_lb_units_regul\"), sample = 0.3, flags = list(lookback = c(5, \n    10), batch_size = c(64, 32), lstm_units = c(8, 12), dense_u = c(8, \n    12), dropout1 = c(0.1, 0.3), recurrent_dropout1 = c(0.1, \n    0.3)))"]
+}
