@@ -1504,7 +1504,7 @@ set.seed(123)
 folders <- list.files(resultsdir, recursive = TRUE,
                         full.names = TRUE)
 
-matching_folders <- grep(".*101\\.keras*", folders, value = TRUE)
+matching_folders <- grep(".*cv[^/]*\\.keras", folders, value = TRUE)
 
 # Loop para obtener un informe de los modelos de cross validation:
 cross_validation <- list()
