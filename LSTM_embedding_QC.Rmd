@@ -1014,7 +1014,7 @@ lstm_units = 32      # Número de unidades en la capa LSTM
 dense_u = 24 # Número de unidades de la capa densa.
 vocabulary_size = 32 # Número de niveles codificados de las variables 
                      # estáticas.
-epochs <- 20
+epochs <- 11
 optimizer <- "adam"
 loss <- "mae"
 ```
@@ -1134,7 +1134,7 @@ attr(rmse, "py_function_name") <- "rmse"
 
 ```{r callbacks}
 # Callbacks
-  file_name <- paste0("lstm_QC_", 101, ".keras") 
+  file_name <- paste0("lstm_QC_", 200, ".keras") 
 
   callbacks <- list(
   callback_tensorboard(log_dir=file.path(resultsdir, "run_a")
@@ -1489,7 +1489,7 @@ naive_model_final <- conditional_lstm(
 
 model <- load_model_weights_hdf5(naive_model_final, filepath =
                                    file.path(resultsdir,
-                                      "lstm_QC_100.keras"))
+                                      "lstm_QC_200.keras"))
 
 evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
 
@@ -1510,7 +1510,7 @@ set.seed(123)
 folders <- list.files(resultsdir, recursive = TRUE,
                         full.names = TRUE)
 
-matching_folders <- grep(".*cv[^/]*\\.keras", folders, value = TRUE)
+matching_folders <- grep(".*cv202307[^/]*\\.keras", folders, value = TRUE)
 
 # Loop para obtener un informe de los modelos de cross validation:
 cross_validation <- list()
@@ -1531,7 +1531,9 @@ for (folder in matching_folders) {
   evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
   
   # Guardar resultados de evaluación en la lista
-  folder_name <- substr(folder, nchar(folder) - 4, nchar(folder))
+  folder_name <- substr(folder, 
+                        nchar(folder) - 21,
+                        nchar(folder) - 6)
   metrics_name <- paste0("metrics_", folder_name)
   cross_validation[[metrics_name]] <- evaluation_result
   
@@ -1604,17 +1606,17 @@ make_selection <- function() {
                       title = "Nombre de la prueba: ",
                       graphics = T),2]
  
-  level <- level_opt[menu(level_opt, 
-                          title = "Nivel de QC: ",
-                          graphics = T)]
+  #level <- level_opt[menu(level_opt, 
+                         # title = "Nivel de QC: ",
+                         # graphics = T)]
   anal <- anal_opt[menu(anal_opt, 
                         title = "Analizador: ",
                         graphics = T)]
     
   
   df <- test_n[test_n$CODIGO_PRUEBA == clc &
-                 test_n$ANALIZADOR == anal &
-                 test_n$NIVEL == level, ]
+                 test_n$ANALIZADOR == anal, ]
+                 #test_n$NIVEL == level, ]
   
   return(df)
 }
@@ -1633,7 +1635,7 @@ test_k_i <-  create_lstm_data.2(
     data = test_data_i,
     lookback = lookback,
     delay = delay,
-    batch_size = batch_size,
+    batch_size = 50,
     min_index = min_index,
     max_index = NULL,
     predseries = predseries)
@@ -1651,7 +1653,7 @@ naive_model_final <- conditional_lstm(
 
 model <- load_model_weights_hdf5(naive_model_final, 
                                  filepath = file.path(resultsdir,
-                                                    "LSTM_QC_100.keras"))
+                                                    "LSTM_QC_200.keras"))
 
 # Predicciones y métricas
 
