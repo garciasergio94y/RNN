@@ -1399,7 +1399,7 @@ chain <- forward_chain_cv(s = 4)
 
 ```{r}
 
-history <- list()
+history_2 <- list()
 
 for (i in 1:length(chain$train)) {
 
@@ -1524,7 +1524,7 @@ require(kableExtra)
 folders <- list.files(resultsdir, recursive = TRUE,
                         full.names = TRUE)
 
-matching_folders <- grep(".*cv[^/]*\\.keras", folders, value = TRUE)
+matching_folders <- grep(".*cv202307[^/]*\\.keras", folders, value = TRUE)
 
 # Loop para obtener un informe de los modelos de cross validation:
 cross_validation <- list()
@@ -1545,7 +1545,9 @@ for (folder in matching_folders) {
   evaluation_result <- evaluate(model, wrap_test, steps = test_steps)
   
   # Guardar resultados de evaluación en la lista
-  folder_name <- substr(folder, nchar(folder) - 4, nchar(folder))
+  folder_name <- substr(folder, 
+                        nchar(folder) - 21, 
+                        nchar(folder) - 6)
   metrics_name <- paste0("metrics_", folder_name)
   cross_validation[[metrics_name]] <- evaluation_result
   
@@ -1618,17 +1620,17 @@ make_selection <- function() {
                       title = "Nombre de la prueba: ",
                       graphics = T),2]
  
-  level <- level_opt[menu(level_opt, 
-                          title = "Nivel de QC: ",
-                          graphics = T)]
+  #level <- level_opt[menu(level_opt, 
+   #                       title = "Nivel de QC: ",
+    #                      graphics = T)]
   anal <- anal_opt[menu(anal_opt, 
                         title = "Analizador: ",
                         graphics = T)]
     
   
   df <- test_n[test_n$CODIGO_PRUEBA == clc &
-                 test_n$ANALIZADOR == anal &
-                 test_n$NIVEL == level, ]
+                 test_n$ANALIZADOR == anal, ]
+                 #test_n$NIVEL == level, ]
   
   return(df)
 }
@@ -1665,7 +1667,7 @@ naive_model_final <- conditional_lstm(
 
 model <- load_model_weights_hdf5(naive_model_final, 
                                  filepath = file.path(resultsdir,
-                                                    "LSTM_QC_100.keras"))
+                                                    "LSTM_QC_200.keras"))
 
 # Predicciones y métricas
 
@@ -1707,7 +1709,7 @@ y_min <- min(c(y_pred, y_true))
 y_max <- max(c(y_pred, y_true))
 
 # Graficar los valores predichos y reales con límites de ejes y ajustados
-jpeg(" .jpg", quality = 90)
+jpeg(" .jpg",quality = 90)
 
 plot(num_prediccion, 
      y_pred, type = "b", col = "blue", pch = 16, 
