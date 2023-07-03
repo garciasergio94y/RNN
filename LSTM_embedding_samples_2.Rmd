@@ -1009,6 +1009,14 @@ data_sel_tr <- read.csv(file.path(resultsdir, "data_sel_tr"),
 data_sel_tr[,1] %<>% as.POSIXct(tz = "Europe/Madrid")
 ```
 
+## Selección opcional de pruebas.
+
+```{r}
+data_sel_tr %<>% subset(CODIGO_PRUEBA == "CLC00638" | # Procalcitonina
+                        CODIGO_PRUEBA == "CLC02816") # Troponina
+```
+
+
 ## Descriptiva de variables y gráficos de datos.
 
 ```{r data description, eval=FALSE}
@@ -1518,14 +1526,14 @@ dynamic_features = 1 # Variables dinámicas (RESULTADO, Wavelets)
 static_features = 4  # Variables estáticas (EDAD_BIN, PACIENTE_SEXO,   
                       #  ANALIZADOR,CODIGO_PRUEBA)
 lstm_units = 8      # Número de unidades en la capa LSTM 
-dense_u = 12 # Número de unidades de la capa densa.
+dense_u = 8 # Número de unidades de la capa densa.
 vocabulary_size = length(unique(train_code$PACIENTE_SEXO)) +
   length(unique(train_code$EDAD_BIN))+
   length(unique(train_code$ANALIZADOR))+
   length(unique(train_code$CODIGO_PRUEBA))
 # Número de niveles codificados de las variables estáticas.
-epochs <- 15
-optimizer <- "adam"
+epochs <- 300
+
 
 ```
 
@@ -1565,22 +1573,22 @@ conditional_lstm <- function(lstm_units, vocabulary_size, dense_u,
   
   lstm_layer_1 <- layer_lstm(units = lstm_units,
                            name = "lstm_1", 
-                           dropout = 0.3,
-                           recurrent_dropout = 0.3,
-                           stateful = T,
-                           return_sequences = T)(dynamic_input_layer,
+                           dropout = 0.1,
+                           recurrent_dropout = 0.1,
+                           stateful = F,
+                           return_sequences = F)(dynamic_input_layer,
                                                  initial_state = list(
                                                    embedding_layer,
                                                    embedding_layer))
-  lstm_layer_2 <- layer_lstm(units = lstm_units,
-                           name = "lstm_2", 
-                           dropout = 0.3,
-                           recurrent_dropout = 0.3,
-                           return_sequences = F)(lstm_layer_1)
+ # lstm_layer_2 <- layer_lstm(units = lstm_units,
+  #                         name = "lstm_2", 
+   #                        dropout = 0.3,
+    #                       recurrent_dropout = 0.3,
+     #                      return_sequences = F)(lstm_layer_1)
 # Capa densa:
   dense_layer <- layer_dense(units = dense_u,
                            activation = "relu",
-                           name = "dense_layer")(lstm_layer_2)
+                           name = "dense_layer")(lstm_layer_1)
 
 # Capa de salida con una unidad de activación lineal para la predicción:  
   output_layer <- layer_dense(units = 1,
@@ -1595,9 +1603,9 @@ conditional_lstm <- function(lstm_units, vocabulary_size, dense_u,
       outputs = list(output_layer)
       ) %>%
     compile(
-      optimizer = optimizer_adam(learning_rate = 0.01),
-      loss      = loss_sigmoid_focal_crossentropy(alpha = 0.8, 
-                                         gamma = 4, 
+      optimizer = optimizer_adam(learning_rate = 0.00004),
+      loss      = loss_sigmoid_focal_crossentropy(alpha = 0.1, 
+                                         gamma = 5, 
                   reduction = tf$keras$losses$Reduction$AUTO),
       # binary_crossentropy
       list("binary_accuracy",
@@ -1634,7 +1642,7 @@ conditional_lstm <- function(lstm_units, vocabulary_size, dense_u,
                       # write_images = T
                       ),
   callback_model_checkpoint(file.path(resultsdir,
-                                      "LSTM_samples_100"),
+                                      "LSTM_samples_200"),
                             monitor = "f1_score",
                             mode = "max",
                             verbose=1,
@@ -1665,7 +1673,7 @@ naive_model_final <- conditional_lstm(
  # Training:
 
   model_final <- naive_model_final %>%
-    fit(wrap_train,
+    keras::fit(wrap_train,
         epochs = epochs,
         steps_per_epoch = train_steps,
         validation_data = wrap_val,
